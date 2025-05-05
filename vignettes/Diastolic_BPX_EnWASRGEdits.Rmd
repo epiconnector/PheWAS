@@ -19,7 +19,34 @@ This notebook demonstrates an Environment‐Wide Association Study (EnWAS) work 
 ```{r workflow, fig.cap = "EnWAS Work Flow",fig.align = 'center',out.width = '90%',echo=FALSE}
 knitr::include_graphics("images/process.png")
 ```
-In this example, we are interested in finding nutrition phenotypes that associate with diastolic blood pressure. We first set up our base model (refer to the half-written paper) that includes a set of confounders we want to adjust for. We then perform some QA/QC steps to ensure that the base model is reasonable, and once that has been done we then will perform the EnWAS. 
+The issue we want to address is the following.  Given an outcome, say diastolic blood pressure, we want to explore a set of phenotypes, say nutrition variables, to see which, if any are associated with changes in blood pressure.  We also know that there are a number of physical and other characteristics that might be confounders: ie they are known to associate with both difference in blood pressure and with choices in foods.
+
+Some key confounders are listed in Table \ref{tab:riskfactors}
+
+\begin{table}
+\centering
+\begin{tabular}{l|r|r|r|r}
+\hline
+Variable  & Association\\
+\hline
+Age & Increases with age \\
+\hline
+Sex &	Men tend to have higher BP until women pass menopause \\
+\hline
+Race &	Black/African American individuals often have higher BP \\
+\hline
+Body Mass Index (BMI) & Strong positive association
+\hline
+Socioeconomic Status (SES) &	Lower SES is linked with higher BP \\
+\hline
+Education level &	Lower education is associated with higher BP\\
+\hline
+\end{tabular}
+\caption{Demographic Risk Factors for Blood Pressure}
+\label{tab:riskfactors}
+\end{table}
+
+In this example, we are interested in finding nutrition phenotypes that associate with diastolic blood pressure. We first set up our base model that includes a set of confounders we want to adjust for. We then perform some QA/QC steps to ensure that the base model is reasonable, and once that has been done we then will perform the EnWAS. 
 
 
 # Identify a response and a set of confounders that will be adjusted for
@@ -44,7 +71,7 @@ models.  This approach has some similarities to the Generalized Additive Model (
 
 
 ```{r setup,warning=FALSE,message=FALSE, echo=F}
-library(PhiWAS)
+library(PheWAS)
 library(splines)
 library(ggplot2)
 library(ggpubr)
@@ -88,10 +115,14 @@ base_df = base_df |> subset(RIDAGEYR>20 & BPXDI1!=0 & BPXDI2!=0 )
 #  < High School
 #   - High School
 #  > High School
-nDEDUC = ifelse(base_df$DMDEDUC2 < 3, "<HS", ifelse(base_df$DMDEDUC2 == 3, "HS", 
-                                                    ifelse(base_df$DMDEDUC2 < 6, ">HS", NA)))
-base_df$DMDEDUC2 <- as.factor(nDEDUC)
-#base_df = na.omit(base_df)
+
+nDEDUC = base_df$DMDEDUC2
+nDEDUC[nDEDUC == "Don't Know"] = NA
+nDEDUC = factor(nDEDUC)
+levels(nDEDUC) = c("<HS", ">HS", "HS", "<HS", ">HS")
+
+base_df$DMDEDUC2 <- nDEDUC
+
 # Take average first and second read for the diastolic blood pressure. -
 # taking some care to use a value if one is present
 base_df$DIASTOLIC <- rowMeans(base_df[, c("BPXDI1", "BPXDI2")], na.rm=TRUE)
@@ -99,14 +130,12 @@ base_df$DIASTOLIC[is.na(base_df$BPXDI1) & is.na(base_df$BPXDI2)] = NA
 base_df$SYSTOLIC <- rowMeans(base_df[, c("BPXSY1", "BPXSY2")], na.rm=TRUE)
 base_df$SYSTOLIC[is.na(base_df$BPXSY1) & is.na(base_df$BPXSY2)] = NA
 #the variables BPQ050A and BPQ040A are taken conditionally so they have missing values put in
-# for anyone who answered no to BPQ020 - and we need to fix that - since there answer to 50A 
- # had they been asked, would have been no (one presumes)
- #set up a dummy for the ones we want to change - also turn "Don't know" from BPQ020 into NA
-hypertensiveMeds = base_df$BPQ050A
-hypertensiveMeds[base_df$BPQ020==2] = 2
-hypertensiveMeds[base_df$BPQ040A==2] = 2
-hypertensiveMeds = factor(hypertensiveMeds, levels=c(1,2), labels=c("Yes","No"))
+# for anyone who answered no to BPQ020 - and we need to fix that - since their answer to 50A 
+# had they been asked, would have been no (one presumes)
+#set up a dummy for the ones we want to change - also turn "Don't know" from BPQ020 into NA
 # The current study included 6866 US adults aged 40 years or older. 
+hypertensiveMeds = base_df$BPQ050A
+hypertensiveMeds = ifelse(base_df$BPQ020=="No", "No", hypertensiveMeds)
 base_df$hypertensiveMeds = hypertensiveMeds
 base_df$hypertension <- base_df$DIASTOLIC >= 90 | base_df$SYSTOLIC >= 140 |  base_df$hypertensiveMeds=="Yes"
 base_df$unControlledHypertension = base_df$DIASTOLIC >= 90 | base_df$SYSTOLIC >= 140
@@ -116,7 +145,7 @@ Perhaps try to study the univariate relationship between DIASTOLIC (SYSTOLIC?) a
 ```{r EDA}
   ##make_bins seems to need some help dealing with missing
  
-  plot_bins(x="DIASTOLIC",y="INDFMPIR", data=base_df, nobsperbin =400, title="Diastolic vs Poverty")
+  plot_bins(x="DIASTOLIC",y="INDFMPIR", data=base_df, title="Diastolic vs Poverty")
   boxplot(base_df$INDFMPIR~base_df$hypertensiveMeds)
          
 ```
@@ -159,7 +188,7 @@ We need to check the base model and ensure it runs correctly before performing E
 It is clear to see that the diastolic blood pressure has a parabola-like shape relation with the age, as shown in Figure \@ref(fig:age). The yellow and blue lines are generated by smooth prediction from linear and spline models. The dots are randomly sampled in 20% of the data points.
 
 
-```{r,age, fig.cap = "Linear vs Spline", fig.align = 'center',echo=FALSE}
+```{r,age, fig.cap = "Linear vs Spline", fig.align = 'center',echo=FALSE, eval=FALSE}
 
 pred_df <- data.frame("Age"=base_df$RIDAGEYR, 
                       "Gender"=base_df$RIAGENDR,
@@ -199,7 +228,7 @@ A possible solution to check the "goodness of fit (GoF)" is to check whether app
 We can further check the base models with binned plots, which can be helpful when the data set is large. The binned plot is a way that "zoom in" to look at the trends.
 
 
-```{r binned33,results = "asis",warning=FALSE,echo=FALSE}
+```{r binned33, results = "asis",warning=FALSE,echo=FALSE, eval=FALSE}
 ##for at least age and poverty the residuals look a lot better
 df_age_res <- list("Linear"=make_bins(x=sub_df$RIDAGEYR,y=lmS_base$residual,nbin=100),
                 "Spline"=make_bins(x=sub_df$RIDAGEYR,y=nsS_base$residuals,nbin=100)
@@ -214,6 +243,12 @@ df_ind_res = list(Linear = make_bins(x=sub_df$INDFMPIR, y=lmS_base$residual, nbi
                  Spline = make_bins(x=sub_df$INDFMPIR, y=nsS_base$residual, nbin=200))
 ind_res = plot_bins2(df_ind_res, xlab="INDFMPIR", ylab="Binned Residuals")
 
+}
+
+
+xasdaf
+
+```{r, eval=FALSE}
 ##stopped here
 pred_df <- data.frame("Age"=base_df$RIDAGEYR, "Gender"=base_df$RIAGENDR, "BMI"=base_df$BMXBMI,"DIASTOLIC" = base_df$DIASTOLIC,"Linear"=lm_base$residuals,"Spline"=ns_base$residuals)
 mpred_df <- reshape::melt(pred_df, id=c("DIASTOLIC","Age","Gender",'BMI'))
@@ -249,7 +284,7 @@ Figure \@ref(fig:qaac) shows QA/QC plots.
 - **_c)_** Binned plots for residuals with respect to age variable to look at the trends of residuals against age.
 
 
-```{r qaac, fig.cap = "Quality Assurance and Quality Control",fig.align = 'center',fig.width = 10,fig.height=8,echo=FALSE}
+```{r qaac, eval=FALSE, fig.cap = "Quality Assurance and Quality Control",fig.align = 'center',fig.width = 10,fig.height=8,echo=FALSE}
 ggpubr::ggarrange(fitt_g,res_g,age_res,nrow = 3,ncol = 1,labels = c('a)','b)','c)'))
 ```
 
@@ -259,7 +294,7 @@ ggpubr::ggarrange(fitt_g,res_g,age_res,nrow = 3,ncol = 1,labels = c('a)','b)','c
 Identify a set of phenotypes and exposures that we want to test for association with the response variable of interest.
 In this example, we choose phenotype from the dietary data, we identified the phenotypes and saved them into a built-in variable call `exposure_vars` in EnWAS package. "The objective of the dietary interview component is to obtain detailed dietary intake information from NHANES participants. The dietary intake data are used to estimate the types and amounts of foods and beverages (including all types of water) consumed during the 24-hour period prior to the interview (midnight to midnight), and to estimate intakes of energy, nutrients, and other food components from those foods and beverages." More detail can be found [code book](https://wwwn.cdc.gov/Nchs/Nhanes/2015-2016/DR1TOT_I.htm). 
 
-```{r}
+```{r, eval=FALSE}
 exposure_vars = c("DRQSPREP","DR1TNUMF" ,"DR1TKCAL" ,"DR1TPROT", "DR1TCARB", "DR1TSUGR", "DR1TFIBE", "DR1TTFAT", "DR1TSFAT" ,"DR1TMFAT" ,"DR1TPFAT", "DR1TCHOL" ,
                   "DR1TATOC" ,"DR1TRET"  ,"DR1TVARA" ,"DR1TBCAR" ,"DR1TCRYP" ,"DR1TLZ"  , "DR1TVB1" , "DR1TVB2" , "DR1TNIAC", "DR1TVB6" , "DR1TFOLA", "DR1TFA",  
                   "DR1TFF", "DR1TFDFE", "DR1TVB12" ,"DR1TVC","DR1TVK" ,"DR1TCALC", "DR1TPHOS" ,"DR1TMAGN", "DR1TIRON", "DR1TZINC", "DR1TCOPP", "DR1TSODI",
@@ -278,7 +313,7 @@ In NHANES, the phenotypes are often right-skewed with a very long tail on the ri
 Figure \@ref(fig:DR1TTFAT) shows an example of Total fat (DR1TTFAT) with non transformation, log-z transformation, and inverse normal transformation.
 
 
-```{r DR1TTFAT, fig.cap = "Transformation for Total fat (gm)",fig.align = 'center',out.width = '85%',fig.height=4,echo=FALSE}
+```{r DR1TTFAT, eval=FALSE, fig.cap = "Transformation for Total fat (gm)",fig.align = 'center',out.width = '85%',fig.height=4,echo=FALSE}
 plot_trans <- function(x){
   layout(matrix(c(1,2,3), ncol=3, byrow=TRUE))
   par(mar=c(4.0,4.0,3.5,1))
@@ -293,7 +328,7 @@ plot_trans(diet_data$DR1TTFAT)
 # Carry out a set of regression models.
 In this step, we need to carry out a set of regression models, one for each exposure/phenotype in Step 5, and report on the analysis.
 
-```{r}
+```{r, eval=FALSE}
 data = merge(base_df,diet_data,by = "SEQN")
 data = na.omit(data)
 xwas = enwas(ns_str,exposure_vars,data)
@@ -303,7 +338,7 @@ xwas_inv <- enwas(ns_str,exposure_vars,data,trans = "inv")
 
 Figure \@ref(fig:enwas00forest) shows the estimates and CI of the exposure variables and only displays the top 10 (if they have more than 30 satisfy the filters) ranked by absolute values of the estimates. The variables with their CI containing zeros are also removed.
 
-```{r enwas00forest, fig.cap = "Forest Plot for non tranformation EnWAS", fig.align = 'center',warning=F, out.width = '85%',dpi = 200}
+```{r enwas00forest, eval=FALSE, fig.cap = "Forest Plot for non tranformation EnWAS", fig.align = 'center',warning=F, out.width = '85%',dpi = 200}
 forest_plot(xwas$enwas_res,10) # filter out CI contains 0
 ```
 
@@ -315,13 +350,13 @@ Figure \@ref(fig:enwasinv1log)  shows the top 10 exposures, ranked by the differ
 - `ns_inv` denotes variables transformed inverse normal transformation
 - `ns-log` denotes variables transformed with log followed by z-transformation
 
-```{r enwasinv1log, fig.cap = "Multiple Forest Plots", fig.align = 'center',echo=F,warning=F, out.width = '90%',dpi = 200}
+```{r enwasinv1log, eval=FALSE, fig.cap = "Multiple Forest Plots", fig.align = 'center',echo=F,warning=F, out.width = '90%',dpi = 200}
 forest_plot_mult(list(ns=xwas$enwas_res,ns_inv=xwas_inv$enwas_res,ns_log=xwas_log$enwas_res),10)
 ```
 
 The following scatter plot shows the inverse normal transformation estimates against estimates (beta^hat * SD(X)) of nontransformed variables. The top 20 has added text for the variables, but it is pretty clear to show the information.
 
-```{r enwas_inv22, echo=F,warning=F, echo=F,out.width = '90%',fig.align = 'center',out.width = '85%'}
+```{r enwas_inv22, eval=FALSE, echo=F,warning=F, echo=F,out.width = '90%',fig.align = 'center',out.width = '85%'}
 ns=xwas$enwas_res
 ns_inv=xwas_inv$enwas_res
 ns_log=xwas_log$enwas_res
@@ -344,7 +379,7 @@ enwas_res = data.frame(x=ns$estimate,
 
 Figure \@ref(fig:enwasinv230) estimates of EnWAS  non-transformed (`EnWAS`) with inverse normal transformation (`EnWAS INT`). The the top 20 most difference variables label with variable names.
 
-```{r enwasinv230, fig.cap = "Scatter Plot for EnWAS against EnWAS with INT", warning=FALSE,echo=F,fig.align = 'center', out.width = '90%',dpi = 200}
+```{r enwasinv230, eval=FALSE, fig.cap = "Scatter Plot for EnWAS against EnWAS with INT", warning=FALSE,echo=F,fig.align = 'center', out.width = '90%',dpi = 200}
 library(ggrepel)
 top_n_diff <- 10
 enwas_res |>
