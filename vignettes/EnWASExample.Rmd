@@ -177,8 +177,6 @@ lm_base <- lm(formula = lm_str, data=sub_df)
 summary(lm_base)
 
 ```
-
-
 # QA/QC for Base Model
 
 We need to check the base model and ensure it runs correctly before performing EnWAS. However, the classical methods such as Q-Q plots, residual plots, and goodness of fit (GoF) tests are generally ill-suited. We want to provide the following plots to demonstrate the criteria of QA/QC. 
@@ -193,7 +191,6 @@ agebins = cut(sub_df$RIDAGEYR, seq(30,85, by=5), right=FALSE)
 boxplot(lm_base$residuals ~ agebins)
 
 ```
-
 # Identify a set of phenotypes and exposures 
 
 Identify a set of phenotypes and exposures that we want to test for association with the response variable of interest.
@@ -209,10 +206,10 @@ diet_data = data.frame(nhanes('DR1TOT_I'))
 diet_data = diet_data[, exposure_vars]
 dim(diet_data)
 row.names(diet_data) = diet_data$SEQN
-##and then do a left join
-
+##and now ensure that we have the same variables in the same order
 diet_data = diet_data[sub_df$SEQN, ]
 ```
+
 Once we load the dietary data, we should also check it with the PHESANT function and preprocess it if necessary.
 We may need to eplore the missing data for the above data according to [the notebook](https://ccb-hms.github.io/Imputation/6_phonto/missing_exploratory.html). Currently, we only keep the columns that has less missing rate less than 15%. The observations with missing values in the covariates in the baseline model or current phenotype will be remove during EnWAS.
 
@@ -304,4 +301,6 @@ ggplot(aes(x,y,label = term,colour=term)) +
 
 
 We can also compare the non-transformed with log-z transformation, and log-z transformation with inverse normal transformation.
+
+
 
