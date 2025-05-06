@@ -195,15 +195,18 @@ build_formula <- function(base_model,exposure_var,inv=FALSE) {
   )
 }
 
-#' Inverse Normal Transformation
+#' Inverse Normal Rank Transformation
+#' The inverse normal rank transformation is widely used in Genome Wide Association Studies and provides a reasonable approach to transforming covariates that may have unusual values or where the distributions might be long-tailed.
 #'
-#' @param x a numeric, complex, character or logical vector.
+#' @param x a numeric vector
 #' @param na.last for controlling the treatment of NAs. If TRUE, missing values in the data are put last; if FALSE, they are put first; if NA, they are removed; if "keep" they are kept with rank NA.
 #' @param ties.method a character string specifying how ties are treated, it could be "average", "first", "last", "random", "max", "min"
 #'
 #' @return transformed data
 #' @export
 #'
+#' @seealso
+#' For more details and discussion: \url{https://pmc.ncbi.nlm.nih.gov/articles/PMC2921808/}
 #' @examples invNorm(nhanes$BMXWAIST)
 invNorm <- function(x,na.last = "keep", ties.method="average") {
   qnorm((rank(x,na.last = na.last, ties.method=ties.method)
