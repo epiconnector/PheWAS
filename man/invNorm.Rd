@@ -2,12 +2,13 @@
 % Please edit documentation in R/enwas.R
 \name{invNorm}
 \alias{invNorm}
-\title{Inverse Normal Transformation}
+\title{Inverse Normal Rank Transformation
+The inverse normal rank transformation is widely used in Genome Wide Association Studies and provides a reasonable approach to transforming covariates that may have unusual values or where the distributions might be long-tailed.}
 \usage{
 invNorm(x, na.last = "keep", ties.method = "average")
 }
 \arguments{
-\item{x}{a numeric, complex, character or logical vector.}
+\item{x}{a numeric vector}
 
 \item{na.last}{for controlling the treatment of NAs. If TRUE, missing values in the data are put last; if FALSE, they are put first; if NA, they are removed; if "keep" they are kept with rank NA.}
 
@@ -17,8 +18,12 @@ invNorm(x, na.last = "keep", ties.method = "average")
 transformed data
 }
 \description{
-Inverse Normal Transformation
+Inverse Normal Rank Transformation
+The inverse normal rank transformation is widely used in Genome Wide Association Studies and provides a reasonable approach to transforming covariates that may have unusual values or where the distributions might be long-tailed.
 }
 \examples{
 invNorm(nhanes$BMXWAIST)
+}
+\seealso{
+For more details and discussion: \url{https://pmc.ncbi.nlm.nih.gov/articles/PMC2921808/}
 }
