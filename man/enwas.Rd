@@ -4,7 +4,7 @@
 \alias{enwas}
 \title{Environment‐Wide Association Study (EnWAS)}
 \usage{
-enwas(base_model, exposure_vars, data_set, trans = "none")
+enwas(base_model, exposure_vars, data_set, trans = "none", fdr = "BH")
 }
 \arguments{
 \item{base_model}{a string of base model}
@@ -13,7 +13,9 @@ enwas(base_model, exposure_vars, data_set, trans = "none")
 
 \item{data_set}{data set}
 
-\item{trans}{"log" :log and scale transformation or inv: inverse normal transformation}
+\item{trans}{how to transform the exposure variables options are 'none', 'log': log of Z transformation or 'inv': inverse normal transformation}
+
+\item{fdr}{the FDR adjustment to use, passed to 'p.adjust', default is 'BH'}
 }
 \value{
 the model list and EnWAS result
