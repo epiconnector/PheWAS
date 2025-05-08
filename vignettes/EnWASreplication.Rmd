@@ -293,8 +293,11 @@ Figure \@ref(fig:enwasinv1log)  shows the top 10 exposures, ranked by the differ
 Let's just look at the whole table.
 
 ```{r enwasTable}
+ df = xwas$enwas_res
 
- xwas$enwas_res |> kbl(caption = "EnWAS results for Systolic Blood Pressure",align='c') |>
+ rounddf = as.data.frame(lapply(df, function(x) if(is.numeric(x)) round(x, 3) else x))
+ 
+ rounddf |> kbl(caption = "EnWAS results for Systolic Blood Pressure",align='c') |>
   kable_classic(full_width = T, html_font = "Cambria")
 
 

@@ -5,7 +5,8 @@
 #' @param base_model a string of base model
 #' @param exposure_vars the phenotype list
 #' @param data_set data set
-#' @param trans "log" :log and scale transformation or inv: inverse normal transformation
+#' @param trans how to transform the exposure variables options are 'none', 'log': log of Z transformation or 'inv': inverse normal transformation
+#' @param fdr the FDR adjustment to use, passed to 'p.adjust', default is 'BH'
 #'
 #' @return the model list and EnWAS result
 #' @export
@@ -16,7 +17,8 @@ enwas <-
   function(base_model,
            exposure_vars,
            data_set,
-           trans = "none") {
+           trans = "none",
+           fdr = "BH") {
 
     num_var <- length(exposure_vars)
 
@@ -47,7 +49,8 @@ enwas <-
 
       # We need to remove the NAs for current phenotype before invNorm(),
       # otherwise it fill NA, which may undesired values.
-      ph_dat <- data_set[!is.na(data_set[,exposure]),]
+      # just check for missing values ... ph_dat <- data_set[!is.na(data_set[,exposure]),]
+      ph_dat = data_set
       if (trans=="inv" & exposure %in% num_cols) {
         ph_dat[,exposure] <- invNorm(ph_dat[,exposure])
       }
@@ -80,14 +83,10 @@ enwas <-
 
     }
 
-    # print(knitr::kable(association_list))
-    # xwas_list <-
-    #   association_list[association_list$term %in% c(exposure_vars, factor_terms), ]
-
     xwas_list <-
       association_list[association_list$term %in% exposure_vars, ]
 
-
+    ##what is this doing?
     if(trans =="none"){
       sd_x_list <-  sapply(data_set, function(x)
         sd(as.numeric(x),na.rm = TRUE))
@@ -101,7 +100,7 @@ enwas <-
 
 
     xwas_list$fdr <-
-      p.adjust(xwas_list$p.value, method = 'BY')
+      p.adjust(xwas_list$p.value, method = fdr)
 
     xwas_list$lower <- xwas_list$estimate - 1.96 * xwas_list$std.error
     xwas_list$upper <- xwas_list$estimate + 1.96 * xwas_list$std.error
@@ -111,9 +110,6 @@ enwas <-
     qc_mtx[,2:9] <- sapply(qc_mtx[,2:9],as.numeric)
 
     return (list(qc_mtx = qc_mtx,enwas_res = xwas_list,model_list=model_list[xwas_list$term]))
-
-
-
   }
 
 
