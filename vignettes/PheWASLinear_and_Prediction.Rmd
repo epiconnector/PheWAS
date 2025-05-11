@@ -1,0 +1,368 @@
+---
+title: "EnWAS Replication Study Work"
+date: "Updated on : `r date()`"
+output:
+  bookdown::html_document2: default
+
+---
+```{r, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>"
+)
+```
+
+# Objective
+
+This notebook demonstrates an Environment‐Wide Association Study (EnWAS) work flow shown in Figure \@ref(fig:workflow). 
+
+```{r workflow, fig.cap = "EnWAS Work Flow",fig.align = 'center',out.width = '90%',echo=FALSE}
+knitr::include_graphics("images/process.png")
+```
+The issue we want to address is the following.  Given an outcome, say systolic blood pressure, we want to explore a set of phenotypes, say nutrition variables, to see which, if any are associated with changes in blood pressure.  We also know that there are a number of physical and other characteristics that might be confounders: ie they are known to associate with both difference in blood pressure and with choices in foods.
+
+Some key confounders are listed in Table \ref{tab:riskfactors}
+
+\begin{table}
+\centering
+\begin{tabular}{l|r|r|r|r}
+\hline
+Variable  & Association\\
+\hline
+Age & Increases with age \\
+\hline
+Sex &	Men tend to have higher BP until women pass menopause \\
+\hline
+Race &	Black/African American individuals often have higher BP \\
+\hline
+Body Mass Index (BMI) & Strong positive association
+\hline
+Socioeconomic Status (SES) &	Lower SES is linked with higher BP \\
+\hline
+Education level &	Lower education is associated with higher BP\\
+\hline
+\end{tabular}
+\caption{Demographic Risk Factors for Blood Pressure}
+\label{tab:riskfactors}
+\end{table}
+
+In this example, we are interested in finding nutrition phenotypes that associate with systolic blood pressure. We first set up our base model that includes a set of confounders we want to adjust for. We then perform some QA/QC steps to ensure that the base model is reasonable, and once that has been done we then will perform the EnWAS. 
+
+
+### Identify a response and a set of confounders that will be adjusted for
+
+In this demonstration, we choose systolic [blood pressure](https://wwwn.cdc.gov/Nchs/Nhanes/2015-2016/BPX_I.htm#BPXDI1) as the outcome interest. 
+
+For each survey a number of people were chosen to provide blood pressure measurements and these were obtained in duplicate on two separate days.
+To get an more accurate measurement of the systolic blood pressure, we average two times of measurements for each participants.
+We will only use individuals over 30 years of age.
+
+Identify a set of confounders that will be adjusted for.  These are typically not of interest themselves, but are important established confounders such as age or sex that should be adjusted for.
+
+Based on our literature review we decided that sex, age, ethnicity, education and BMI are likely to affect blood pressure, and we choose them as the confounders to adjust for.  
+
+Normally the model fitting and QA/QC process would be carried out in an exploratory and iterative fashion, however that is not easy to capture in a static document.  Instead we will compare two basic models, one where we assume that there is a straight line relationship between continuous confounders and our response, and a second approach where we use spline 
+models.  This approach has some similarities to the Generalized Additive Model (GAMs) and much of the literature there is useful. There are some differences though, and we will outline them as we go.
+
+
+```{r setup,warning=FALSE,message=FALSE, echo=F}
+library(PheWAS)
+library(splines)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(DBI)
+library(nhanesA)
+library(DT)
+library(kableExtra)
+library(broom)
+library(knitr)
+
+```
+
+
+## Load data that contains responses and confounders, and preprocess using PHONTO 
+
+We load the NHANES data using functions from [PHONTO package](https://github.com/ccb-hms/phonto). The PHONTO package provides a set function to facilitate researchers to get access NHANES data in our docker database.  More detail about data query and search tools can be found on [quick start page](https://ccb-hms.github.io/Imputation/6_phonto/quick_start.html).
+In addition, the `phesant()` function allows the user to check the data inspired by the [PHESANT package](https://github.com/MRCIEU/PHESANT).
+
+Now, to replicate, we will look at the _J epoch.
+```{r phonto}
+cols = list(DEMO_J=c("RIDAGEYR","RIAGENDR","RIDRETH1","DMDEDUC2","INDFMPIR"), 
+            BPX_J=c('BPXDI1','BPXDI2',"BPXSY1","BPXSY2"),
+            BPQ_J=c('BPQ050A','BPQ040A', 'BPQ020','BPQ080','BPQ100D'),
+            BMX_J="BMXBMI"
+            )
+base_df <- jointQuery(cols)
+
+# remove age under 30 and diastolic with 0s
+base_df = base_df |> subset(RIDAGEYR>30 & BPXDI1!=0 & BPXDI2!=0 )
+
+phs_res = phesant(base_df)
+phs_res$phs_res |> kbl(caption = "PHESANT-like Process Results",align='c') |>
+  kable_classic(full_width = T, html_font = "Cambria")
+```
+Table \@ref(tab:phonto) shows variables names, the ratio of unique values (`r_unique`), the proportion of zeros (`r_zeros`), and the ratio of NAs (`r_NAs`), which is calculated by the number of unique values, zeros, and NAs divided by total records. The categorical data types (ordered or unrecorded) are presented by integers, and the PHESANT function category them as multilevel. The data are categorized as continuous (doubles, integers) and multilevel(characters, integers with unique values less than 20), as shown type column. For example, education (DMDEDUC2) is category as Multilevel(8) means the PHESANT process considers it multilevel and has 8 levels; moreover, `r_NAs` shows that almost 50% of education data is missing, and we recommend users check data in the cases like this. `r_zeros` shows that about 0.8% blood pressure measurements are filled as 0s. We may want to remove those data records because blood pressure with 0s is for dead people.
+
+We remove missing values (shown with NAs in R data frame) and blood pressure filled with 0s, which indicates.
+In the NHANES database gender(`RIAGENDR`) encode as 1 for male and 2 for female. Similarly, ethnicity (`RIDRETH1`) are also encode as integers (1 to 5); We need to convert those as variables as factors.
+
+```{r}
+## here things needed a little hand holding - but if we had
+## a cleanup function to turn Don't know and Refused into NA
+
+nDEDUC = base_df$DMDEDUC2
+nDEDUC[nDEDUC == "Don't Know"] = NA
+nDEDUC[nDEDUC == "Refused"] = NA
+
+nDEDUC = factor(nDEDUC)
+levels(nDEDUC) = c("<HS", ">HS", "HS", "<HS", ">HS")
+
+base_df$DMDEDUC2 <- nDEDUC
+
+## on the basis of some modeling we will combine Mexican American, Other Hispanic and Other Race 
+## into one group - 
+race = factor(base_df$RIDRETH1)
+levels(race) = c("Hispanic+", "Black", "White", "Hispanic+", "Hispanic+")
+base_df$race = race
+
+# Take average first and second read for the diastolic blood pressure. -
+# taking some care to use a value if one is present
+base_df$DIASTOLIC <- rowMeans(base_df[, c("BPXDI1", "BPXDI2")], na.rm=TRUE)
+base_df$DIASTOLIC[is.na(base_df$BPXDI1) & is.na(base_df$BPXDI2)] = NA
+base_df$SYSTOLIC <- rowMeans(base_df[, c("BPXSY1", "BPXSY2")], na.rm=TRUE)
+base_df$SYSTOLIC[is.na(base_df$BPXSY1) & is.na(base_df$BPXSY2)] = NA
+#the variables BPQ050A and BPQ040A are taken conditionally so they have missing values put in
+# for anyone who answered no to BPQ020 - and we need to fix that - since their answer to 50A 
+# had they been asked, would have been no (one presumes)
+#set up a dummy for the ones we want to change - also turn "Don't know" from BPQ020 into NA
+# The current study included 6866 US adults aged 40 years or older. 
+hypertensiveMeds = base_df$BPQ050A
+hypertensiveMeds = ifelse(base_df$BPQ020=="No", "No", hypertensiveMeds)
+base_df$hypertensiveMeds = hypertensiveMeds
+base_df$hypertension <- base_df$DIASTOLIC >= 90 | base_df$SYSTOLIC >= 140 |  base_df$hypertensiveMeds=="Yes"
+base_df$unControlledHypertension = base_df$DIASTOLIC >= 90 | base_df$SYSTOLIC >= 140
+## for poverty we will use a cutoff of 4 for INDFMPIR that gets close to the top 20% vs bottom 80%
+base_df$lowincome = base_df$INDFMPIR < 4
+## for BMI let's just use obese vs everything else
+base_df$obese = base_df$BMXBMI >= 30
+```
+
+Perhaps try to study the univariate relationship between SYSTOLIC and some of the features.
+Here we show a strong relationship for income, and a slightly weaker one for obesity.
+```{r EDA}
+  t.test(base_df$SYSTOLIC ~base_df$lowincome)
+ boxplot(base_df$SYSTOLIC ~ base_df$lowincome)
+  t.test(base_df$SYSTOLIC ~ base_df$obese)
+ boxplot(base_df$SYSTOLIC ~ base_df$obese)
+#  boxplot(base_df$INDFMPIR~base_df$hypertensiveMeds)
+         
+```
+# Build Baseline Model
+
+To find plausible models, we should build models and perform QA/QC process iteratively. In the following demonstrations, we built a linear regression model and another linear model with apply natural spline function on the continuous variables. The outcome is systolic blood pressure, which is the average of the two systolic measurements, sex (`RIAGENDR`), age (`RIDAGEYR`), race, obesity, being relatively low income, and education level.
+
+
+```{r build_base_model,echo=TRUE,results = "asis"}
+sub_df = base_df[,c("SEQN", "RIDAGEYR", "RIAGENDR", "obese", "race", "DMDEDUC2", "lowincome", "hypertensiveMeds", "DIASTOLIC", "SYSTOLIC")]
+
+
+
+sub_df=sub_df[complete.cases(sub_df),]
+dim(sub_df)
+
+##because ages above 80 are recorded as 80 it is very likely that any model that does
+## not account for this will be inaccurate so we are going to make an indicator variable and 
+## include it
+
+sub_df$over80 = (sub_df$RIDAGEYR == 80)
+
+lm_spline_str <- 'SYSTOLIC ~ ns(RIDAGEYR, df=7) + RIAGENDR + obese + race + lowincome + over80' 
+lm_spline <- lm(formula = lm_spline_str, data = sub_df)
+
+# 2. Define the linear model (just replace spline with raw RIDAGEYR)
+lm_linear_str <- 'SYSTOLIC ~ RIDAGEYR + RIAGENDR + obese + race + lowincome + over80' 
+lm_linear <- lm(formula = lm_linear_str, data = sub_df)
+
+
+# Tidy summary
+tidy_linear_model <- tidy(lm_linear)
+
+# Print as table
+kable(tidy_linear_model, digits = 3, caption = "Linear Regression Summary") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+# Print as table
+tidy_spline_model <- tidy(lm_spline)
+kable(tidy_spline_model, digits = 3, caption = "Spline Regression Summary") %>%
+  kable_styling(bootstrap_options = c("striped", "hover"))
+
+```
+
+Let's look at the relationship between age and systolic blood pressure.  We have fit it with a spline, so it is not that obvious from the ouput of the regression model, just what the relationship is.
+
+```{r fitagecurve}
+
+   ##fit 49 values
+ageR <- 31:79
+dfpred1 <- data.frame(RIDAGEYR = ageR, 
+                      RIAGENDR = rep("Male", 49), 
+                      obese = rep(FALSE, 49), 
+                      DMDEDUC2 = rep("HS", 49),  # Only needed if your model uses this
+                      race = rep("White", 49), 
+                      lowincome = rep(FALSE, 49),
+                      over80 = rep(FALSE, 49))
+
+# Predict with both models
+pred_spline <- predict(lm_spline, newdata = dfpred1)
+pred_linear <- predict(lm_linear, newdata = dfpred1)
+  
+
+# Plot and compare
+plot(sub_df$RIDAGEYR, sub_df$SYSTOLIC,
+     xlab = "Age", ylab = "SYSTOLIC", pch = 16, col = rgb(0.2, 0.2, 0.2, 0.3))
+
+lines(ageR, pred_spline, col = "skyblue", lwd = 2)
+lines(ageR, pred_linear, col = "orange", lwd = 2, lty = 2)
+
+legend("topright", legend = c("Spline Model", "Linear Model"),
+       col = c("skyblue", "orange"), lty = c(1, 2), lwd = 2)
+
+```
+
+# QA/QC for Base Model
+
+We need to check the base model and ensure it runs correctly before performing EnWAS. However, the classical methods such as Q-Q plots, residual plots, and goodness of fit (GoF) tests are generally ill-suited. We want to provide the following plots to demonstrate the criteria of QA/QC. 
+
+It is clear to see that the diastolic blood pressure has a parabola-like shape relation with the age, as shown in Figure \@ref(fig:age). The yellow and blue lines are generated by smooth prediction from linear and spline models. The dots are randomly sampled in 20% of the data points.
+
+We can bin age into 5 year intervals and then examine boxplots of the residuals.  What we see is that there is some evidence for increasing variability as age increases. This could affect inference, but may not be large enough to matter.
+
+```{r plotbins}
+
+agebins = cut(sub_df$RIDAGEYR, seq(30,85, by=5), right=FALSE)
+boxplot(lm_spline$residuals ~ agebins)
+
+```
+# Identify a set of phenotypes and exposures 
+
+Identify a set of phenotypes and exposures that we want to test for association with the response variable of interest.
+In this example, we choose phenotype from the dietary data, we identified the phenotypes and saved them into a built-in variable call `exposure_vars` in EnWAS package. "The objective of the dietary interview component is to obtain detailed dietary intake information from NHANES participants. The dietary intake data are used to estimate the types and amounts of foods and beverages (including all types of water) consumed during the 24-hour period prior to the interview (midnight to midnight), and to estimate intakes of energy, nutrients, and other food components from those foods and beverages." More detail can be found [code book](https://wwwn.cdc.gov/Nchs/Nhanes/2015-2016/DR1TOT_J.htm). 
+
+```{r}
+exposure_vars = c("SEQN", "DRQSPREP","DR1TNUMF" ,"DR1TKCAL" ,"DR1TPROT", "DR1TCARB", "DR1TSUGR", "DR1TFIBE", "DR1TTFAT", "DR1TSFAT" ,"DR1TMFAT" ,"DR1TPFAT", "DR1TCHOL" ,
+                  "DR1TATOC" ,"DR1TRET"  ,"DR1TVARA" ,"DR1TBCAR" ,"DR1TCRYP" ,"DR1TLZ"  , "DR1TVB1" , "DR1TVB2" , "DR1TNIAC", "DR1TVB6" , "DR1TFOLA", "DR1TFA",  
+                  "DR1TFF", "DR1TFDFE", "DR1TVB12" ,"DR1TVC","DR1TVK" ,"DR1TCALC", "DR1TPHOS" ,"DR1TMAGN", "DR1TIRON", "DR1TZINC", "DR1TCOPP", "DR1TSODI",
+                  "DR1TPOTA" ,"DR1TSELE" ,"DR1TMOIS", "DR1TS040","DR1TS080", "DR1TS120", "DR1TS160", "DR1TS180" ,"DR1TM161", "DR1TM181", "DR1TM201", "DR1TP183",
+                  "DR1TP204")
+diet_data = data.frame(nhanes('DR1TOT_J'))
+diet_data = diet_data[, exposure_vars]
+dim(diet_data)
+row.names(diet_data) = diet_data$SEQN
+##and now ensure that we have the same variables in the same order
+diet_data = diet_data[as.character(sub_df$SEQN), ]
+
+sapply(diet_data, function(x) sum(is.na(x)))
+ccdd = complete.cases(diet_data)
+
+sub_dfE = sub_df[ccdd,]
+diet_dataE = diet_data[ccdd,]
+jointDF = left_join(sub_dfE, diet_dataE, by="SEQN")
+sapply(jointDF, function(x) sum(is.na(x)))
+
+EVs = exposure_vars[c(-1,-2)]
+```
+
+Once we load the dietary data, we should also check it with the PHESANT function and preprocess it if necessary.
+We may need to eplore the missing data for the above data according to [the notebook](https://ccb-hms.github.io/Imputation/6_phonto/missing_exploratory.html). Currently, we only keep the columns that has less missing rate less than 15%. The observations with missing values in the covariates in the baseline model or current phenotype will be remove during EnWAS.
+
+```{r checkVals}
+diet_res = phesant(jointDF[,EVs])
+diet_res$phs_res |> kbl(caption = "PHESANT-like Process Results",align='c') |>
+  kable_classic(full_width = T, html_font = "Cambria")
+
+
+```
+
+## Predict race and sex with exposures
+In this step, we need to carry out a set of regression models, one for each exposure/phenotype in Step 5, and report on the analysis.
+
+```{r}
+
+df_clean <- jointDF[, c("race", EVs)] |> na.omit()
+
+# Apply inverse normal transformation
+df_clean[EVs] <- lapply(df_clean[EVs], function(x) invNorm(x, na.last = "keep", ties.method = "average"))
+
+library(randomForest)
+set.seed(42)
+rf_model <- randomForest(as.factor(race) ~ ., data = df_clean, importance = TRUE)
+print(rf_model)
+
+# Variable importance
+varImpPlot(rf_model)
+
+# Confusion matrix
+print(rf_model$confusion)
+
+# Accuracy
+cat("OOB Accuracy:", 1 - rf_model$err.rate[nrow(rf_model$err.rate), "OOB"], "\n")
+
+# 
+# df_clean <- jointDF[, c("RIAGENDR", EVs)] |> na.omit()
+# # Apply inverse normal transformation
+# df_clean[EVs] <- lapply(df_clean[EVs], function(x) invNorm(x, na.last = "keep", ties.method = "average"))
+# rf_model <- randomForest(as.factor(RIAGENDR) ~ ., data = df_clean, importance = TRUE)
+# print(rf_model)
+# 
+# # Variable importance
+# varImpPlot(rf_model)
+# 
+# # Confusion matrix
+# print(rf_model$confusion)
+# 
+# # Accuracy
+# cat("OOB Accuracy:", 1 - rf_model$err.rate[nrow(rf_model$err.rate), "OOB"], "\n")
+
+
+```
+
+DR1TFIBE (fiber) and DR1TVB2 (Vitamin B2) are consistently top-ranked in both panels — these may be strong predictors of racial dietary patterns.
+
+
+```{r}
+
+
+df_clean <- jointDF[, c("RIAGENDR", EVs)] |> na.omit()
+# Apply inverse normal transformation
+df_clean[EVs] <- lapply(df_clean[EVs], function(x) invNorm(x, na.last = "keep", ties.method = "average"))
+rf_model <- randomForest(as.factor(RIAGENDR) ~ ., data = df_clean, importance = TRUE)
+print(rf_model)
+
+# Variable importance
+varImpPlot(rf_model)
+
+# Confusion matrix
+print(rf_model$confusion)
+
+# Accuracy
+cat("OOB Accuracy:", 1 - rf_model$err.rate[nrow(rf_model$err.rate), "OOB"], "\n")
+
+
+```
+Top variables (most predictive of sex based on accuracy loss):
+
+DR1TKCAL (Calories)
+
+DR1TNIAC (Niacin)
+
+DR1TIRON (Iron)
+
+DR1TVB1 (Vitamin B1)
+
+DR1TVB6 (Vitamin B6)
+
+
+
+
+
