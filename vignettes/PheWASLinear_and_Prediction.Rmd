@@ -298,32 +298,13 @@ library(randomForest)
 set.seed(42)
 rf_model <- randomForest(as.factor(race) ~ ., data = df_clean, importance = TRUE)
 print(rf_model)
-
-# Variable importance
-varImpPlot(rf_model)
-
 # Confusion matrix
 print(rf_model$confusion)
 
 # Accuracy
 cat("OOB Accuracy:", 1 - rf_model$err.rate[nrow(rf_model$err.rate), "OOB"], "\n")
-
-# 
-# df_clean <- jointDF[, c("RIAGENDR", EVs)] |> na.omit()
-# # Apply inverse normal transformation
-# df_clean[EVs] <- lapply(df_clean[EVs], function(x) invNorm(x, na.last = "keep", ties.method = "average"))
-# rf_model <- randomForest(as.factor(RIAGENDR) ~ ., data = df_clean, importance = TRUE)
-# print(rf_model)
-# 
-# # Variable importance
-# varImpPlot(rf_model)
-# 
-# # Confusion matrix
-# print(rf_model$confusion)
-# 
-# # Accuracy
-# cat("OOB Accuracy:", 1 - rf_model$err.rate[nrow(rf_model$err.rate), "OOB"], "\n")
-
+# Variable importance
+varImpPlot(rf_model, main="Environmental Features Importance  for Race")
 
 ```
 
@@ -339,15 +320,14 @@ df_clean[EVs] <- lapply(df_clean[EVs], function(x) invNorm(x, na.last = "keep", 
 rf_model <- randomForest(as.factor(RIAGENDR) ~ ., data = df_clean, importance = TRUE)
 print(rf_model)
 
-# Variable importance
-varImpPlot(rf_model)
-
 # Confusion matrix
 print(rf_model$confusion)
 
 # Accuracy
 cat("OOB Accuracy:", 1 - rf_model$err.rate[nrow(rf_model$err.rate), "OOB"], "\n")
 
+# Variable importance
+varImpPlot(rf_model, main="Environmental Features Importance  for Sex")
 
 ```
 Top variables (most predictive of sex based on accuracy loss):
@@ -361,6 +341,25 @@ DR1TIRON (Iron)
 DR1TVB1 (Vitamin B1)
 
 DR1TVB6 (Vitamin B6)
+
+```{r}
+
+
+df_clean <- jointDF[, c("obese", EVs)] |> na.omit()
+# Apply inverse normal transformation
+df_clean[EVs] <- lapply(df_clean[EVs], function(x) invNorm(x, na.last = "keep", ties.method = "average"))
+rf_model <- randomForest(as.factor(obese) ~ ., data = df_clean, importance = TRUE)
+print(rf_model)
+# Confusion matrix
+print(rf_model$confusion)
+
+# Accuracy
+cat("OOB Accuracy:", 1 - rf_model$err.rate[nrow(rf_model$err.rate), "OOB"], "\n")
+
+# Variable importance
+varImpPlot(rf_model, main="Environmental Features Importance for Obese")
+
+```
 
 
 
