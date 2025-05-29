@@ -1,0 +1,534 @@
+---
+title: 'EnWAS on Systolic BP - individual cycles'
+fig-width: 10
+fig-height: 8
+fig-format: svg
+---
+
+# General procedure
+
+Our broad goal is the following:
+
+* Choose an outcome variable: In this case, systolic blood pressure.
+
+* Choose a set of phenotypes to see which, if any, are associated with
+  the outcome. For NHANES, a natural choice is the set of nutrition
+  variables.
+
+We also know that there are a number of physical and other
+characteristics that might be confounders. This may depend on the
+choice of outcome and phenotypes. For example, the following are known
+to associate with both difference in blood pressure and with choices
+in foods.
+
+* Age: Increases with age
+
+* Sex: Men tend to have higher BP until women pass menopause
+
+* Race: Black/African American individuals often have higher BP
+
+* BMI: Strong positive association
+
+* Socioeconomic Status (SES): Lower SES is linked with higher BP
+
+* Education level: Lower education is associated with higher BP
+
+In this example, we are interested in finding NUTRITION PHENOTYPES
+that associate with systolic blood pressure. Some choices we make for
+the analysis:
+
+* Do this for one particular cycle. Our goal is to eventually also
+  recreate the analysis after combining cycles.
+
+* Ignore sampling weights and clustering for now.
+
+We first set up our base model that includes a set of confounders we
+want to adjust for. We then perform some QA/QC steps to ensure that
+the base model is reasonable, and once that has been done we then will
+perform the EnWAS.
+
+
+```{r}
+library(nhanesA)
+library(phonto)
+library(PheWAS)
+library(splines)
+library(lattice)
+library(latticeExtra)
+```
+
+
+# Baseline model
+
+In this demonstration, we choose systolic blood pressure as the
+outcome interest.  For each survey, a number of participants were
+chosen to provide blood pressure measurements. Three consecutive blood
+pressure readings were obtained; a fourth attempt was made if a
+previous measurement was interrupted or incomplete. 
+
+```{r}
+qc_var("BPXSY1")
+qc_var("BPXSY2")
+qc_var("BPXSY3")
+qc_var("BPXSY4")
+```
+
+We use an average of the valid (non-missing, and non-zero)
+measurements as our outcome variable.
+
+
+We will only use individuals over 30 years of age.
+
+
+We also need to identify a set of confounders that will be adjusted
+for. These are typically not of interest themselves, but are important
+established confounders that should be adjusted for.  Based on our
+literature review we decided that sex, age, ethnicity, education and
+BMI are likely to affect blood pressure, and we choose them as the
+confounders to adjust for.
+
+Normally the model fitting and QA/QC process would be carried out in
+an exploratory and iterative fashion, however that is not easy to
+capture in a static document.  Instead we will compare four basic
+models: 
+
+* We use either the raw systolic BP as the response, or its
+  inverse. The latter is suggested by Box-Cox profile log-likelihood
+  plots.
+
+* We consider either a straight line relationship between continuous
+  confounders and our response, or we use basis spline models (with
+  fixed degrees of freedom).
+  
+
+## Load data that contains responses and confounders
+
+We first load the outcome and covariate data for a particular
+cycle. We also include variables from the `BPQ` table, which record
+responses to interview questions regarding blood pressure, including
+the participant's history regarding hypertension. (These are not used
+yet, but may be incorporated in future --- a little care is needed to
+create the correct covariates due to skipping.)
+
+
+```{r}
+CYCLE <- "_E" # Use CYCLE <- "" for first cycle (1999-2000)
+cols <- list(DEMO = c("RIDAGEYR","RIAGENDR","RIDRETH1","DMDEDUC2","INDFMPIR"), 
+             BPX  = c("BPXSY1", "BPXSY2", "BPXSY3", "BPXSY4"),
+             BPQ  = c("BPQ050A","BPQ040A", "BPQ020","BPQ080","BPQ100D"),
+             BMX  = "BMXBMI")
+names(cols) <- paste0(names(cols), CYCLE)
+base_df <- jointQuery(cols)
+```
+
+We use the average of the valid blood pressure readings as our
+outcome. We omit zero values, which do not actually appear for
+systolic BP measurements, but do appear in recorded diastolic BP
+values.
+
+```{r}
+bpsys_all <- data.matrix(base_df[c("BPXSY1", "BPXSY2", "BPXSY3", "BPXSY4")])
+bpsys_all[bpsys_all == 0] <- NA
+base_df$SYSTOLIC <- rowMeans(bpsys_all, na.rm = TRUE)
+base_df$INVSYSTOLIC <- 1 / base_df$SYSTOLIC
+```
+
+Next we plot both `SYSTOLIC` and `INVSYSTOLIC` vs age to get a sense
+of what kind of base model we might need.
+
+
+```{r}
+xyplot(base_df, SYSTOLIC ~ RIDAGEYR | RIDRETH1 + RIAGENDR,
+       smooth = TRUE, grid = TRUE, col.line = 1)
+xyplot(base_df, INVSYSTOLIC ~ RIDAGEYR | RIDRETH1 + RIAGENDR,
+       smooth = TRUE, grid = TRUE, col.line = 1)
+```
+
+The plots suggest some nonlinearity in the relationship of systolic BP
+vs age, but a straight line relationship seems reasonable after
+age 30. For subsequent analysis, we will restrict to ages between 30
+and 79 (ages above 79 are coded as 80, so information regarding how
+age affects the outcome beyond this point is limited).^[I think there
+is no good way to use such data, but I need to think this through and
+write it down carefully.]
+
+```{r}
+base_df <- subset(base_df,
+                  RIDAGEYR > 30 & RIDAGEYR < 80 &
+                  is.finite(SYSTOLIC))
+```
+
+The transformed variable `INVSYSTOLIC` has slightly better behaviour
+in terms of homoscedasticity.
+
+The other observation from the plot is that the relationship between
+age and systolic BP has different slopes for males and females, so the
+model should probably include an interaction.
+
+
+The other continuous predictor in our base model is BMI. Similar plots
+with log(BMI) on the x-axis suggest that systolic BP increases with
+BMI, but the relationship is not particularly strong (the relationship
+is much stronger for children and young adults, who have been
+excluded). We will consequently include only a linear term for BMI in
+the base model.
+
+
+```{r}
+xyplot(base_df, SYSTOLIC ~ log2(BMXBMI) | RIDRETH1 + RIAGENDR,
+       smooth = TRUE, grid = TRUE, col.line = 1)
+xyplot(base_df, INVSYSTOLIC ~ log2(BMXBMI) | RIDRETH1 + RIAGENDR,
+       smooth = TRUE, grid = TRUE, col.line = 1)
+```
+
+Before proceeding, we use the `phesant()` function in `phonto`,
+inspired by the [PHESANT package](https://github.com/MRCIEU/PHESANT),
+to check the properties of the data.
+
+
+```{r}
+phesant(base_df)$phs_res |> DT::datatable()
+```
+
+The table shows variables names, the ratio of unique values
+(`r_unique`), the proportion of zeros (`r_zeros`), and the ratio of
+NAs (`r_NAs`), which is calculated by the number of unique values,
+zeros, and NAs divided by total records. The data are categorized as
+continuous (doubles, integers) and multilevel (characters, integers
+with unique values less than 20), as shown type column.
+
+<!-- 
+
+No longer true after subset() above
+
+For example, education (`DMDEDUC2`) is categorized as Multilevel(5),
+meaning that the PHESANT process considers it categorical with 5
+levels; moreover, `r_NAs` shows that almost 50% of the education data
+is missing. We will omit `DMDEDUC2` from our model for now.
+
+-->
+ 
+ 
+We will combine Mexican American, Other Hispanic and Other Race into
+one group.
+
+
+```{r}
+base_df$race <- factor(base_df$RIDRETH1)
+levels(base_df$race)
+levels(base_df$race) <- c("Hispanic+", "Black", "White", "Hispanic+", "Hispanic+")
+```
+
+TODO: Similar for `DMDEDUC2`, maybe `INDFMPIR`.
+
+The variables `BPQ040A` (Taking prescription for hypertension) and
+`BPQ050A` (Now taking prescribed medicine for HBP) are asked
+conditionally only to those who responded "Yes" to `BPQ020` (Ever told
+you had high blood pressure). For others, the reponses for `BPQ040A`
+and `BPQ050A` are recorded as missing, but they can be reasonably
+assumed to be "No". While we are at it, we also turn "Don't know"
+responses to `NA`.
+
+```{r}
+base_df$hbpMeds <- base_df$BPQ050A
+base_df <- within(base_df,
+{
+    hbpMeds[BPQ020 == "No"] <- "No"
+    hbpMeds[BPQ020 == "Don't know"] <- NA
+    hbpMeds[hbpMeds == "Don't know"] <- NA
+})
+phesant(base_df[, c("SEQN", "BPQ020", "BPQ040A", "BPQ050A", "hbpMeds")])$phs_res
+```
+
+This substantially reduces the number of missing values.
+
+
+## Compare and choose baseline model
+
+To find plausible models, we would in practice build models and
+perform QA/QC process iteratively. Here we keep this process to a
+minimum, primarily as a sanity check.
+
+We primarly compare four baseline models: two with age as linear vs
+basis spline, each with either `SYSTOLIC` or `INVSYSTOLIC` as the
+response. To avoid any subsequent complications arising from different
+numbers of missing observations in different models (which can make
+model comparisons invalid), we first create a subset of the data with
+only the relevant variables, and omit all rows with missing values.
+
+```{r}
+keep_vars <-
+    c("SYSTOLIC", "INVSYSTOLIC", "SEQN",
+      "RIDAGEYR", "RIAGENDR", "race", ## education/"DMDEDUC2", lowincome/"INDFMPIR", 
+      "BMXBMI", "hbpMeds", "BeginYear", "EndYear")
+sub_df <- na.omit(base_df[keep_vars])
+dim(sub_df)
+```
+
+We first consider the model with `SYSTOLIC` as response.
+
+```{r}
+lin_model <- 'SYSTOLIC ~ RIDAGEYR * RIAGENDR + race + log(BMXBMI) + hbpMeds' # educ + lowincome
+spline_model <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 7) * RIAGENDR + race + log(BMXBMI) + hbpMeds'
+basefm_lin <- lm(lin_model, data = sub_df)
+basefm_spline <- lm(spline_model, data = sub_df)
+anova(basefm_lin) |> knitr::kable()
+anova(basefm_spline) |> knitr::kable()
+```
+
+All covariates are significant. We next compare the spline and the
+straight line models.
+
+```{r}
+anova(basefm_lin, basefm_spline) |> knitr::kable()
+```
+
+This suggests that the additional flexibility of the spline term does
+not lead to a substantially better fit, and the simpler straight line
+model is adequate.
+
+
+Next we fit the analogous models with response `INVSYSTOLIC`.
+
+
+```{r}
+lin_model_inv <- 'INVSYSTOLIC ~ RIDAGEYR * RIAGENDR + race + log(BMXBMI) + hbpMeds'
+spline_model_inv <- 'INVSYSTOLIC ~ ns(RIDAGEYR, df = 7) * RIAGENDR +  + race + log(BMXBMI) + hbpMeds'
+basefm_lin_inv <- lm(lin_model_inv, data = sub_df)
+basefm_spline_inv <- lm(spline_model_inv, data = sub_df)
+```
+
+As with the previous models, we see that the spline term is
+unnecessary, but otherwise all covariates are significant.
+
+```{r}
+anova(basefm_lin_inv, basefm_spline_inv) |> knitr::kable()
+anova(basefm_lin_inv) |> knitr::kable()
+```
+
+
+## QA/QC for Base Model
+
+At this point we would normally check the baseline model through
+various regression diagnostics and ensure its appropriateness before
+proceeding with EnWAS. Here, we only consider a plot of the absolute
+standardized residuals as a function of the fitted values, as a visual
+check for systematic heteroscedasticity.
+
+```{r}
+p <- xyplot(abs(rstandard(basefm_lin)) ~ sub_df$RIDAGEYR,
+            smooth = TRUE, col.line = "black", grid = TRUE,
+            xlab = "Age (years)", ylab = "Standardized residuals")
+pinv <- xyplot(abs(rstandard(basefm_lin_inv)) ~ sub_df$RIDAGEYR,
+               smooth = TRUE, col.line = "black", grid = TRUE,
+               xlab = "Age (years)", ylab = "Standardized residuals")
+c(SYSTOLIC = p, INVSYSTOLIC = pinv)
+```
+
+There is not much to suggest that one model as particularly
+better. For simplicity, we choose the model with untransformed
+`SYSTOLIC` as response for subsequent analysis.
+
+TODO: We could compare formally using LRT, but that doesn't really
+seem worth the effort.
+
+
+## Visualization of baseline model
+
+Before proceeding, we plot the fitted baseline model to understand how
+it models look at the relationship between age and systolic blood
+pressure.  For the spline model in particular, it is not that obvious
+from the ouput of the regression model, just what the relationship is.
+
+```{r}
+dfpred1 <-
+    with(sub_df,
+         expand.grid(RIDAGEYR = 31:79,
+                     RIAGENDR = unique(RIAGENDR),
+                     BMXBMI = c(20, 30),
+                     hbpMeds = unique(hbpMeds),
+                     ## education = unique(education),
+                     ## lowincome = unique(lowincome),
+                     race = unique(race)))
+dfpred1$predSysBP_lin <- predict(basefm_lin, newdata = dfpred1)
+dfpred1$predSysBP_spline <- predict(basefm_spline, newdata = dfpred1)
+xyplot(dfpred1, predSysBP_lin ~ RIDAGEYR | race,
+       groups = interaction(RIAGENDR, BMXBMI, hbpMeds, sep = "/"),
+       auto.key = list(columns = 4, title = "Gender / BMI/ hbpMeds"),
+       type = "l", layout = c(NA, 1))
+xyplot(dfpred1, predSysBP_spline ~ RIDAGEYR | race,
+       groups = interaction(RIAGENDR, BMXBMI, hbpMeds, sep = "/"),
+       auto.key = list(columns = 4, title = "Gender / BMI / hbpMeds"),
+       type = "l", layout = c(NA, 1))
+```
+
+
+# Identify set of phenotypes and exposures 
+
+For further analysis, we fix the baseline model.
+
+```{r}
+basefm <- basefm_lin
+```
+
+The next step is to identify a set of phenotypes and exposures that we
+want to test for association with the response variable of interest.
+
+In this example, we choose phenotype from the dietary data, we
+identified the phenotypes and saved them into a built-in variable
+call `exposure_vars` in EnWAS package. "The objective of the
+dietary interview component is to obtain detailed dietary intake
+information from NHANES participants. The dietary intake data are
+used to estimate the types and amounts of foods and beverages
+(including all types of water) consumed during the 24-hour period
+prior to the interview (midnight to midnight), and to estimate
+intakes of energy, nutrients, and other food components from those
+foods and beverages." More details can be found in the [code
+book](https://wwwn.cdc.gov/Nchs/Nhanes/2015-2016/DR1TOT_H.htm).
+
+
+
+```{r}
+exposure_vars <-
+    c("SEQN", "DR1DRSTZ", "DRDINT", "DRQSPREP","DR1TNUMF", "DR1TKCAL", "DR1TPROT",
+      "DR1TCARB", "DR1TSUGR", "DR1TFIBE", "DR1TTFAT", "DR1TSFAT", "DR1TMFAT",
+      "DR1TPFAT", "DR1TCHOL", "DR1TATOC", "DR1TRET"  ,"DR1TVARA", "DR1TBCAR",
+      "DR1TCRYP", "DR1TLZ", "DR1TVB1" , "DR1TVB2" , "DR1TNIAC", "DR1TVB6" ,
+      "DR1TFOLA", "DR1TFA", "DR1TFF", "DR1TFDFE", "DR1TVB12", "DR1TVC","DR1TVK",
+      "DR1TCALC", "DR1TPHOS", "DR1TMAGN", "DR1TIRON", "DR1TZINC", "DR1TCOPP", "DR1TSODI",
+      "DR1TPOTA", "DR1TSELE", "DR1TMOIS", "DR1TS040","DR1TS080", "DR1TS120",
+      "DR1TS160", "DR1TS180", "DR1TM161", "DR1TM181", "DR1TM201", "DR1TP183",
+      "DR1TP204")
+diet_table_name <- paste0("DR1TOT", CYCLE)
+diet_data <- as.data.frame(nhanes(diet_table_name))
+diet_data <- diet_data[exposure_vars]
+dim(diet_data)
+```
+
+We now need to match the rows of this dataset to the rows of our
+fitted model. Ideally, all rows in `sub_df` should have nutrition data
+available, but this may not be true.
+
+```{r}
+setdiff(sub_df$SEQN, diet_data$SEQN) |> str()
+```
+
+We will use the intersection to be safe, and additionally omit
+participants with 'unreliable' nutrition data.
+
+```{r}
+row.names(diet_data) <- diet_data$SEQN
+rownames(sub_df) <- sub_df$SEQN
+common_rows <- intersect(rownames(diet_data), rownames(sub_df))
+df_merged <-
+    cbind(sub_df[common_rows, ], diet_data[common_rows, ]) |>
+        subset(DR1DRSTZ == "Reliable and met the minimum criteria")
+```
+
+Before proceeding further, we drop any newly introduced missing
+values.
+
+```{r}
+dim(sub_df)
+dim(df_merged)
+df_merged <- na.omit(df_merged)
+dim(df_merged)
+jointDF <- df_merged
+EVs <- exposure_vars[c(-1,-2,-3,-4)]
+```
+
+## Transformation
+
+In NHANES, the phenotypes are often right-skewed with a very long tail
+on the right side of the distribution, which can be addressed with
+logarithm transformation followed by a z-transformation. However, it
+would take a tremendous effort to manually and exhaustively inspect
+the distributions and figure out appropriate transformation methods
+for all kinds of phenotypes with different types of distribution when
+dealing with extensive data sets. Therefore, we recommend using
+inverse normal rank transformation (INRT) for all continuous variables
+because INRT can be applied to various distributions.
+
+<!-- 
+
+This doesn't work --- WHY ?? !!
+
+```r
+invnorm <- function(x) {
+    if (anyNA(x)) stop("Missing values not supported")
+    q <- qnorm(ppoints(length(x)))
+    q[order(x)] # break ties randomly
+}
+```
+
+-->
+
+
+## Carry out a set of regression models
+
+In this step, we need to carry out a set of regression models, one for
+each exposure / phenotype, and report on the analysis.
+
+This is done by adding each term to the baseline model by cycling
+through the EVs one at a time.
+
+
+```{r}
+summarize_var <- function(var, base_model, data, trans = c("none", "log", "invnorm"))
+{
+    trans <- match.arg(trans)
+    var <- switch(trans,
+                  none = var,
+                  log = sprintf("asinh(%s)", var), # some have 0 values
+                  invnorm = sprintf("invNorm(%s)", var))
+    fm <- lm(paste0(base_model, " + ", var), data = data)
+    coef(summary(fm))[var, ]
+}
+add_rownames <- function(d, var = "rownames")
+{
+    d[[var]] <- rownames(d)
+    d
+}
+EV_summary_invnorm <- 
+    sapply(EVs, summarize_var, base_model = lin_model,
+           data = df_merged, trans = "invnorm") |>
+        t() |> as.data.frame() |> add_rownames("EV") |>
+        dplyr::mutate(LCL = `Estimate` - 2 * `Std. Error`,
+                      UCL = `Estimate` + 2 * `Std. Error`,
+                      adj_pval = p.adjust(`Pr(>|t|)`, "BH"))
+```
+
+The following plot shows the $t$-statistic for each exposure variable,
+with values that are significant (at 10% after Benjamini-Hochberg FDR
+adjustment) highlighted.
+
+```{r}
+dotplot(reorder(EV, `t value`) ~ `t value`,
+        data = EV_summary_invnorm, pch = 16,
+        groups = ifelse(adj_pval < 0.1,
+                        "significant", "not significant"))
+```
+
+We also plot the confidence intervals for the additional effect of
+each exposure variable compared to the baseline model. As each
+variable has been transformed using INRT, they have been standardized
+to have zero mean and unit variance, and the confidence intervals are
+therefore comparable.
+
+```{r}
+segplot(reorder(EV, `t value`) ~ LCL + UCL,
+        data = EV_summary_invnorm,
+        level = Estimate)
+```
+
+
+```{r}
+topEV <-
+    sort_by(EV_summary_invnorm, ~ adj_pval) |>
+    subset(adj_pval < 0.1) |> getElement("EV")
+(lapply(topEV, metadata_var, table = diet_table_name) |>
+    do.call(what = rbind))[1:3] |> knitr::kable()
+```
+
+
+
