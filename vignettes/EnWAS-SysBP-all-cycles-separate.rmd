@@ -129,7 +129,7 @@ perform_enwas <- function(CYCLE = "")
         cbind(sub_df[common_rows, ], diet_data[common_rows, ]) |>
     subset(DR1DRSTZ == "Reliable and met the minimum criteria")
     df_merged <- na.omit(df_merged)
-    dim(df_merged)
+    cat("Number of observations: ", nrow(df_merged), fill = TRUE)
     jointDF <- df_merged
     EVs <- exposure_vars[c(-1,-2,-3,-4)]
     ## perform EnWAS 
