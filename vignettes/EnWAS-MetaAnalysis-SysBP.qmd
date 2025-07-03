@@ -1,0 +1,189 @@
+---
+title: 'EnWAS Meta-Analysis: Systolic BP'
+fig-width: 10
+fig-height: 8
+fig-format: svg
+cache: false
+---
+
+# General procedure
+
+Our broad goal is the following:
+
+* Choose an outcome variable: In this case, systolic blood pressure.
+
+* Choose a set of phenotypes to see which, if any, are associated with
+  the outcome. For NHANES, a natural choice is the set of nutrition
+  variables.
+
+We also know that there are a number of physical and other
+characteristics that might be confounders. This may depend on the
+choice of outcome and phenotypes. For example, the following are known
+to associate with both difference in blood pressure and with choices
+in foods.
+
+* Age: Increases with age
+
+* Sex: Men tend to have higher BP until women pass menopause
+
+* Race: Black/African American individuals often have higher BP
+
+* BMI: Strong positive association
+
+* Socioeconomic Status (SES): Lower SES is linked with higher BP
+
+* Education level: Lower education is associated with higher BP
+
+In this example, we are interested in finding NUTRITION PHENOTYPES
+that associate with systolic blood pressure. Some choices we make for
+the analysis:
+
+A detailed analysis for one cycle is available
+[here](EnWAS-SysBP-single-cycle.html). In this document, we follow up
+on that analysis by fixing a baseline model and phenotypes of interest
+at the very beginning, and replicate the analysis for each cycle
+separately.
+
+```{r}
+library(nhanesA)
+library(phonto)
+library(PheWAS)
+library(splines)
+library(lattice)
+library(latticeExtra)
+```
+
+# Baseline model and exposure variables
+
+```{r}
+base_model <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) * RIAGENDR + race + log(BMXBMI) + hbpMeds' # educ + lowincome
+exposure_vars <-
+    c("SEQN", "DR1DRSTZ", "DRDINT", "DRQSPREP","DR1TNUMF", "DR1TKCAL", "DR1TPROT",
+      "DR1TCARB", "DR1TSUGR", "DR1TFIBE", "DR1TTFAT", "DR1TSFAT", "DR1TMFAT",
+      "DR1TPFAT", "DR1TCHOL", "DR1TATOC", "DR1TRET"  ,"DR1TVARA", "DR1TBCAR",
+      "DR1TCRYP", "DR1TLZ", "DR1TVB1" , "DR1TVB2" , "DR1TNIAC", "DR1TVB6" ,
+      "DR1TFOLA", "DR1TFA", "DR1TFF", "DR1TFDFE", "DR1TVB12", "DR1TVC","DR1TVK",
+      "DR1TCALC", "DR1TPHOS", "DR1TMAGN", "DR1TIRON", "DR1TZINC", "DR1TCOPP", "DR1TSODI",
+      "DR1TPOTA", "DR1TSELE", "DR1TMOIS", "DR1TS040","DR1TS080", "DR1TS120",
+      "DR1TS160", "DR1TS180", "DR1TM161", "DR1TM181", "DR1TM201", "DR1TP183",
+      "DR1TP204")
+```
+
+# Per cycle reports
+
+We will do EnWAS analysis separately for each cycle, and then try to compare.
+
+`DR1TOT` is only available from cycle C onwards, so we start from there.
+
+```{r}
+nhanesSearchTableNames("DR1TOT")
+```
+
+
+## Utility functions to extract data for a cycle
+
+This needs to be customized for the response variable.
+
+
+```{r}
+prepare_data_control <- function(data, agemin = 30, agemax = 80)
+{
+  base_df <- subset(data, RIDAGEYR > agemin & RIDAGEYR < agemax)
+  base_df$race <- factor(base_df$RIDRETH1)
+  levels(base_df$race) <- c("Hispanic+", "Black", "White", "Hispanic+", "Hispanic+")
+  ## TODO: Similar for `DMDEDUC2`, maybe `INDFMPIR`
+  base_df
+}
+prepare_data_bpsys <- function(data)
+{
+  bpsys_all <- data.matrix(data[c("BPXSY1", "BPXSY2", "BPXSY3", "BPXSY4")])
+  bpsys_all[bpsys_all == 0] <- NA
+  data$SYSTOLIC <- rowMeans(bpsys_all, na.rm = TRUE)
+  data <- within(data,
+                 {
+                   INVSYSTOLIC <- 1 / SYSTOLIC
+                   hbpMeds <- BPQ050A
+                   hbpMeds[BPQ020 == "No"] <- "No"
+                   hbpMeds[BPQ020 == "Don't know"] <- NA
+                   hbpMeds[hbpMeds == "Don't know"] <- NA
+                 })
+  subset(data, is.finite(SYSTOLIC))
+}
+prepare_data <- function(CYCLE)
+{
+  cols <- list(DEMO = c("RIDAGEYR","RIAGENDR","RIDRETH1","DMDEDUC2","INDFMPIR"), 
+               BPX  = c("BPXSY1", "BPXSY2", "BPXSY3", "BPXSY4"),
+               BPQ  = c("BPQ050A","BPQ040A", "BPQ020","BPQ080","BPQ100D"),
+               BMX  = "BMXBMI")
+  names(cols) <- paste0(names(cols), CYCLE)
+  base_df <- jointQuery(cols)
+  ## extract relevant subset
+  base_df <- prepare_data_control(base_df)
+  base_df <- prepare_data_bpsys(base_df)
+  keep_vars <-
+    c("SYSTOLIC", "INVSYSTOLIC", "SEQN",
+      "RIDAGEYR", "RIAGENDR", "race", ## education/"DMDEDUC2", lowincome/"INDFMPIR", 
+      "BMXBMI", "hbpMeds", "BeginYear", "EndYear")
+  na.omit(base_df[keep_vars])
+}
+```
+
+
+```{r}
+#| echo: FALSE
+perform_enwas <- function(CYCLE = "", ...)
+{
+  sub_df <- prepare_data(CYCLE)
+  ## get diet data
+  diet_table_name <- paste0("DR1TOT", CYCLE)
+  diet_data <- as.data.frame(nhanes(diet_table_name))
+  diet_data <- diet_data[exposure_vars]
+  row.names(diet_data) <- diet_data$SEQN
+  rownames(sub_df) <- sub_df$SEQN
+  common_rows <- intersect(rownames(diet_data), rownames(sub_df))
+  df_merged <-
+    cbind(sub_df[common_rows, ], diet_data[common_rows, ]) |>
+    subset(DR1DRSTZ == "Reliable and met the minimum criteria")
+  df_merged <- na.omit(df_merged)
+  cat("Number of observations: ", nrow(df_merged), fill = TRUE)
+  jointDF <- df_merged
+  EVs <- exposure_vars[c(-1,-2,-3,-4)]
+  ## perform EnWAS 
+  generic_enwas(data = df_merged, base_model = base_model, 
+                expvars = EVs, 
+                ...)
+}
+```
+
+
+## Cycles C through J
+
+
+```{r}
+cycles <- paste0("_", LETTERS[3:10])
+e <- sapply(cycles, perform_enwas, trans = "inv", simplify = FALSE)
+```
+
+
+```{r}
+getEstimate <- function(d) structure(d[["Estimate"]], names = d[["EV"]])
+getTValue <- function(d) structure(d[["t value"]], names = d[["EV"]])
+reorderRows <- function(x, FUN = mean, ...) x[order(apply(x, 1, FUN, ...)), ]
+reorderCols <- function(x, FUN = mean, ...) x[, order(apply(x, 2, FUN, ...))]
+```
+
+```{r}
+#| fig-width: 6
+#| fig-height: 12
+## sapply(e, getEstimate) |> heatmap()
+sapply(e, getEstimate) |> reorderRows() |> reorderCols() |> t() |> levelplot()
+```
+
+
+```{r}
+#| fig-width: 6
+#| fig-height: 12
+sapply(e, getTValue) |> reorderRows() |> reorderCols() |> t() |> levelplot()
+```
+
+
