@@ -14,6 +14,8 @@ knitr::opts_chunk$set(
 
 # Objective
 
+Probably too old - don't run
+
 This notebook demonstrates an Environment‐Wide Association Study (EnWAS) work flow shown in Figure \@ref(fig:workflow). 
 
 ```{r workflow, fig.cap = "EnWAS Work Flow",fig.align = 'center',out.width = '90%',echo=FALSE}

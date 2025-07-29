@@ -1,0 +1,409 @@
+---
+title: 'EnWAS Meta-Analysis: Systolic BP'
+fig-width: 10
+fig-height: 8
+fig-format: svg
+cache: false
+---
+
+# Introduction
+
+The notion of an environment-wide association study (EnWAS) is to ascertain the effect of a number of features of interest on an outcome of interest. Since in epidemiology there are often many features and exposures that might be well known to be associated with the outcome of interest we will often want to adjust for some subset of those before assessing the set of EnWAS variables.  One specific point is that EnWAS is not trying to fit an optimal model, per se. It is trying to inform as to the effects of the EnWAS variables on an outcome that has already been adjusted for a number of important and known risk factors. 
+  The basic ideas are modeled on the the genome-wide association studies (GWAS) that are widely used in genetics to try to understand the univariate effect of single nucleotide polymorphisms (SNPs) on different outcomes, such as disease risk or phenotype.  These have been quite successful and replicable across a wide variety of studies. We hope that there are situations in epidemiology where we may also find effects that are replicable and of scientific relevance for the outcomes and features being considered.
+  NHANES (cite NHANES) provides a somewhat ideal resource for developing methodology and exploring how these ideas might transfer over to the area of epidemiology. The fact that NHANES consists of multiple independent cycles provides some opportunities to explore notions of replicability and consistency of models and predictions. 
+   In this paper we outline the process using a specific example of systolic blood pressure and the effects of different nutritional intakes. We believe that this will provide sufficient evidence of the value of the approach and perhaps motivate others to extend and enhance these efforts.
+  
+ 
+## Methods
+
+Our broad strategy is the following:
+
+* Choose an outcome variable: In this case, systolic blood pressure.
+
+* Identify a set of confounders that are known to affect the outcome, but which are not themselves of particular interst in this analysis.  These will be used to identify and fit a baseline model.
+
+* Choose a set of phenotypes to see which, if any, are associated with
+  the outcome. For NHANES, a natural choice is the set of nutrition
+  variables.
+
+In our example we consider the the following features that are known
+to associate with changes in blood pressure. 
+
+TODO: how do we think about the relationship between these and choices in food.
+
+* Age: Increases with age
+
+* Sex: Men tend to have higher BP until women pass menopause then it reverses
+
+* Race: Black/African American individuals often have higher BP
+
+* BMI: Strong positive association
+
+* Socioeconomic Status (SES): Lower SES is linked with higher BP
+
+* Education level: Lower education is associated with higher BP
+
+In this example, we are interested in finding NUTRITION PHENOTYPES
+that associate with systolic blood pressure. Some choices we make for
+the analysis:
+
+### Concerns about confounding.
+
+One of the major challenges in epidemiology, and indeed in most data science applications, is the issue of confounding.  In GWAS studies this can be less important since the genome is essentially determined at birth and not that maleable. However, it is certainly the case that variants in the genome do affect phenotypes, that is the whole purpose of using GWAS, however situations where one SNP has a big impact tend to be rare.  What is more common is that population structure can induce strong signals.  If one consider red hair as a phenotype of interest, then any study that included individuals from Scotland, where the prevalence is about 13% (about 10x global prevalence), would need to address populations structure since any SNP that was higher prevalence in the Scottish population would associate with the red hair phenotype.
+  One approach that seems helpful in the EnWAS context would be to use a machine learning method to try to understand the relationships between the risk factors included in the base-line model and the set of EnWAS variables.
+  
+
+
+### Examples
+
+
+A detailed analysis for one cycle is available
+[here](EnWAS-SysBP-single-cycle.html). In this document, we follow up
+on that analysis by fixing a baseline model and phenotypes of interest
+at the very beginning, and replicate the analysis for each cycle
+separately.
+
+```{r, echo=FALSE, message=FALSE}
+library(nhanesA)
+library(phonto)
+library(PheWAS)
+library(splines)
+library(lattice)
+library(latticeExtra)
+library(metafor)
+library(randomForest)
+library(forestplot)
+```
+
+# Baseline model and exposure variables
+
+```{r setupBaseline}
+base_model <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) * RIAGENDR + race + obese + DMDEDUC2 + lowincome'
+exposure_vars <-
+    c("SEQN", "DR1DRSTZ", "DRDINT", "DRQSPREP","DR1TNUMF", "DR1TKCAL", "DR1TPROT",
+      "DR1TCARB", "DR1TSUGR", "DR1TFIBE", "DR1TTFAT", "DR1TSFAT", "DR1TMFAT",
+      "DR1TPFAT", "DR1TCHOL", "DR1TATOC", "DR1TRET"  ,"DR1TVARA", "DR1TBCAR",
+      "DR1TCRYP", "DR1TLZ", "DR1TVB1" , "DR1TVB2" , "DR1TNIAC", "DR1TVB6" ,
+      "DR1TFOLA", "DR1TFA", "DR1TFF", "DR1TFDFE", "DR1TVB12", "DR1TVC","DR1TVK",
+      "DR1TCALC", "DR1TPHOS", "DR1TMAGN", "DR1TIRON", "DR1TZINC", "DR1TCOPP", "DR1TSODI",
+      "DR1TPOTA", "DR1TSELE", "DR1TMOIS", "DR1TS040","DR1TS080", "DR1TS120",
+      "DR1TS160", "DR1TS180", "DR1TM161", "DR1TM181", "DR1TM201", "DR1TP183",
+      "DR1TP204")
+```
+
+# Per cycle reports
+
+We will do EnWAS analysis separately for each cycle, and then try to compare.
+
+`DR1TOT` is only available from cycle C onwards, so we start from there.
+
+```{r}
+nhanesSearchTableNames("DR1TOT")
+```
+
+
+## Utility functions to extract data for a cycle
+
+This needs to be customized for the response variable.
+Basically we do some preprocessing of the data to get the baseline features
+in a format that we will use of the analysis.
+We reduce the number of race categories, simplify the educational attainment categories,
+turn some groups into missing values and do other basic cleaning and partitioning.
+
+
+```{r}
+prepare_data_control <- function(data, agemin = 30, agemax = 80)
+{
+  base_df <- subset(data, RIDAGEYR > agemin & RIDAGEYR < agemax)
+  base_df$race <- factor(base_df$RIDRETH1)
+  levels(base_df$race) <- c("Hispanic+", "Black", "White", "Hispanic+", "Hispanic+")
+  ## TODO: Similar for `DMDEDUC2`, maybe `INDFMPIR`
+  nDEDUC = base_df$DMDEDUC2
+  nDEDUC[nDEDUC == "Don't Know"] = NA
+  nDEDUC[nDEDUC == "Refused"] = NA
+  nDEDUC = factor(nDEDUC)
+  levels(nDEDUC) = c("<HS", ">HS", "HS", "<HS", ">HS")
+  base_df$DMDEDUC2 <- nDEDUC
+  ## for poverty we will use a cutoff of 4 for INDFMPIR that gets close to the top 20% vs bottom 80%
+  base_df$lowincome = base_df$INDFMPIR < 4
+  ## for BMI let's just use obese vs everything else
+  base_df$obese = base_df$BMXBMI >= 30
+  base_df
+}
+prepare_data_bpsys <- function(data)
+{
+  bpsys_all <- data.matrix(data[c("BPXSY1", "BPXSY2", "BPXSY3", "BPXSY4")])
+  bpsys_all[bpsys_all == 0] <- NA
+  data$SYSTOLIC <- rowMeans(bpsys_all, na.rm = TRUE)
+  data <- within(data,
+                 {
+                   INVSYSTOLIC <- 1 / SYSTOLIC
+                   hbpMeds <- BPQ050A
+                   hbpMeds[BPQ020 == "No"] <- "No"
+                   hbpMeds[BPQ020 == "Don't know"] <- NA
+                   hbpMeds[hbpMeds == "Don't know"] <- NA
+                 })
+  subset(data, is.finite(SYSTOLIC))
+}
+prepare_data <- function(CYCLE)
+{
+  print(CYCLE)
+  cols <- list(DEMO = c("RIDAGEYR","RIAGENDR","RIDRETH1","DMDEDUC2","INDFMPIR"), 
+               BPX  = c("BPXSY1", "BPXSY2", "BPXSY3", "BPXSY4"),
+               BPQ  = c("BPQ050A","BPQ040A", "BPQ020","BPQ080","BPQ100D"),
+               BMX  = "BMXBMI")
+  names(cols) <- paste0(names(cols), CYCLE)
+  base_df <- jointQuery(cols)
+  ## extract relevant subset
+  base_df <- prepare_data_control(base_df)
+  base_df <- prepare_data_bpsys(base_df)
+  keep_vars <-
+    c("SYSTOLIC", "INVSYSTOLIC", "SEQN", "lowincome", "obese",
+      "RIDAGEYR", "RIAGENDR", "race", "DMDEDUC2",
+      "BeginYear", "EndYear")
+  na.omit(base_df[keep_vars])
+}
+```
+
+## Create the data set
+
+Now once we have set up the baseline data we want to join that to the EnWAS variables and ensure that we have good data and that there are no missing values.
+You could, at this point, spend some time imputing missing values or doing other basic model assessments.
+
+```{r getNutrients}
+mergeNutrients = function(CYCLE) {
+  phenotypes = prepare_data(CYCLE)
+  diet_table_name <- paste0("DR1TOT", CYCLE)
+  diet_data <- as.data.frame(nhanes(diet_table_name))
+  diet_data <- diet_data[exposure_vars]
+  row.names(diet_data) <- diet_data$SEQN
+  rownames(phenotypes) <- phenotypes$SEQN
+  common_rows <- intersect(rownames(diet_data), rownames(phenotypes))
+  df_merged <-
+    cbind(phenotypes[common_rows, ], diet_data[common_rows, ]) |>
+    subset(DR1DRSTZ == "Reliable and met the minimum criteria")
+  na.omit(df_merged)
+}
+
+```
+
+We might want a copy of the data all processed in order to do some different things, like a single omnibus analysis.  Or we might want to look at how food intake depends on some of the features we have put in our baseline model, like poverty, obesity etc.
+
+```{r retrievealldata}
+
+## first we merge the nutrients on a per cycle basis
+
+cycles <- paste0("_", LETTERS[3:10])
+alldata = lapply(cycles, mergeNutrients)
+
+##make one big array and add a cycle variable - 
+allD = do.call("rbind", alldata)
+allD$Cycle = rep(cycles, times=sapply(alldata, nrow))
+
+combModel <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) * RIAGENDR + race + obese + DMDEDUC2 + lowincome + Cycle'
+
+lmC = lm(formula=combModel, data=allD)
+summary(lmC)
+drop1(lmC, test= "F")
+
+
+##look at residuals from this model
+# Example data
+
+age_group <- cut(allD$RIDAGEYR, 
+                 breaks = quantile(allD$RIDAGEYR, probs = seq(0, 1, length.out = 21), na.rm = TRUE), 
+                 include.lowest = TRUE, 
+                 labels = FALSE)
+
+## here we can see a slight trend in increased variance that we might want to address
+boxplot(lmC$residuals ~ age_group, main = "Large Model")
+
+##not sure checking Cycle matters so much with it in the model - 
+##TODO - is it worth fitting the model without cycle and showing the residuals?
+# boxplot(lmC$residuals ~ allD$Cycle)
+```
+
+
+
+```{r smallermodel}
+
+combSmall <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) + RIAGENDR + race + obese + DMDEDUC2 + lowincome + Cycle'
+
+lmSmall = lm(formula=combSmall, data=allD)
+summary(lmSmall)
+drop1(lmSmall, test="F")
+
+boxplot(lmSmall$residuals ~ age_group, main="Reduced Model")
+
+exposure_vars <-
+    c("SEQN", "DR1DRSTZ", "DRDINT", "DRQSPREP","DR1TNUMF", "DR1TKCAL", "DR1TPROT",
+      "DR1TCARB", "DR1TSUGR", "DR1TFIBE", "DR1TTFAT", "DR1TSFAT", "DR1TMFAT",
+      "DR1TPFAT", "DR1TCHOL", "DR1TATOC", "DR1TRET"  ,"DR1TVARA", "DR1TBCAR",
+      "DR1TCRYP", "DR1TLZ", "DR1TVB1" , "DR1TVB2" , "DR1TNIAC", "DR1TVB6" ,
+      "DR1TFOLA", "DR1TFA", "DR1TFF", "DR1TFDFE", "DR1TVB12", "DR1TVC","DR1TVK",
+      "DR1TCALC", "DR1TPHOS", "DR1TMAGN", "DR1TIRON", "DR1TZINC", "DR1TCOPP", "DR1TSODI",
+      "DR1TPOTA", "DR1TSELE", "DR1TMOIS", "DR1TS040","DR1TS080", "DR1TS120",
+      "DR1TS160", "DR1TS180", "DR1TM161", "DR1TM181", "DR1TM201", "DR1TP183",
+      "DR1TP204")
+ EVs <- exposure_vars[c(-1,-2,-3,-4)]
+ 
+ ##now we have fit all of these.
+  combDenwas = generic_enwas(data = allD, base_model = base_model, 
+                expvars = EVs, trans = "invnorm")
+  
+ # colnames(xx)[c(1,6,7)] = c("estimate", "lower", "upper")
+  
+   xy = combDenwas |> dplyr::filter(LCL*UCL > 0) |>
+    dplyr::top_n(20,abs(Estimate)) |> dplyr::arrange(dplyr::desc(Estimate))
+
+  
+  
+  forestplot(labeltext = row.names(xy),
+           mean = xy$Estimate,
+           lower = xy$LCL,
+           upper = xy$UCL,
+           zero = 0, boxsize = 0.2,
+           xlog = FALSE)
+ 
+           
+     
+
+```
+
+
+```{r}
+#| echo: FALSE
+
+## here we likely need to spend some time evaluating the fit of the base models
+evalBase <- function(df_merged)
+{
+  return(lm(formula = base_model, data = df_merged))
+}
+
+
+```
+
+## A meta-analysis approach
+
+
+### Fit the base model separately for each cycle and get a few summary stats from it
+
+```{r fitbase}
+
+eBase <- sapply(alldata, evalBase, simplify=FALSE)
+
+sapply(eBase, function(x) summary(x)$r.squared)
+sapply(eBase, function(x) summary(x)$coefficients["obeseTRUE",1])
+sapply(eBase, function(x) summary(x)$coefficients["raceWhite",1])
+sapply(eBase, function(x) summary(x)$coefficients["raceBlack",1])
+
+```
+
+### Now fit EnWAS to each cycle
+
+We will just reuse the `alldata` object, which is a list where each element is the data set for one of the NHANES cycles.  We revert to the `base_model` which does not include a term for the cycle, since we are modeling each cycle separately.  And then we rearrange these data into a list where each element corresponds to one of the EnWAS variables and has the estimates from each of the cycles.
+
+```{r}
+
+e <- lapply(alldata, function(x) generic_enwas(x, base_model = base_model, 
+                expvars = EVs, trans = "invnorm"))
+
+
+byEV = vector("list", 48)
+names(byEV) = row.names(e[[1]])
+
+## could add in a row for the whole model estimate and one for the meta-analysis estimate
+
+for(i in 1:48)
+  byEV[[i]] = do.call("rbind", lapply(e, function(x) x[i,]))
+
+## par(ask=TRUE) - to step through
+
+```
+
+## Compare estimates across cycles 
+
+Now we can use the `metafor` package to do a meta-analysis for each of the EnWAS features.
+Then, we can use that to identify some subse of them that might be interesting to create a forest plot.
+
+```{r metafor}
+
+#xx = byEV[[1]]
+#xx$Var = xx$`Std. Error`^2
+
+metaEV = lapply(byEV, \(x) {
+        # Random-effects meta-analysis with clustering by cycle
+         res <- rma.mv(yi = Estimate, 
+              V = x$`Std. Error`^2, 
+              random = ~ 1 | row.names(byEV[[1]]), 
+              data = x)
+
+         return(summary(res)) } )
+
+##probably we should be looking at an FDR approach here
+sort(sapply(metaEV, \(x) x$pval), dec=F)
+
+```
+
+Here we can create a forest plot for each of the different features. 
+
+```{r tryfps}
+
+mkFP = function(DATA, var) {
+ xx = forestplot(labeltext = row.names(DATA),
+           mean = DATA$Estimate,
+           title = var,
+           lower = DATA$LCL,
+           upper = DATA$UCL,
+           zero = 0, boxsize = 0.2,
+           xlog = FALSE)
+ return(xx)
+}
+# for(i in 1:48 ) plot(mkFP(byEV[[i]], names(byEV[i])))
+
+mkFP(byEV[[1]], names(byEV[1]))
+
+
+```
+
+
+
+
+
+
+```{r}
+getEstimate <- function(d) structure(d[["Estimate"]], names = d[["EV"]])
+getTValue <- function(d) structure(d[["t value"]], names = d[["EV"]])
+reorderRows <- function(x, FUN = mean, ...) x[order(apply(x, 1, FUN, ...)), ]
+reorderCols <- function(x, FUN = mean, ...) x[, order(apply(x, 2, FUN, ...))]
+```
+
+```{r}
+#| fig-width: 6
+#| fig-height: 12
+## sapply(e, getEstimate) |> heatmap()
+sapply(e, getEstimate) |> reorderRows() |> reorderCols() |> t() |> levelplot()
+```
+
+
+```{r}
+#| fig-width: 6
+#| fig-height: 12
+sapply(e, getTValue) |> reorderRows() |> reorderCols() |> t() |> levelplot()
+```
+
+## Explore relationship between risk factors and EnWAS features
+
+Here we want to consider some tools that might help us understand what the relationship is between the risk factors included in the baseline model and the nutritional features included in the EnWAS.  If any of the nutritional features are highly related to a known risk factor then we would have some amount of confounding.
+
+We will use machine learning and in particular Random Forests, since they are relatively easy to set up and are quite good methods for understanding prediction.
+We look at predicting race and obesity. Show that the OOB error rates are pretty high, suggesting that there might not be a large amount of signal in the nutrient amounts regarding the risk factors we conditioned on.
+
+```{r rfforRace}
+d1 = allD[, EVs]
+m1rf = randomForest(as.factor(allD$race) ~ ., data = d1)
+
+##it seems randomForests doesn't treat logical vectors as factors...
+m2rf = randomForest(as.factor(allD$obese) ~ ., data=d1)
+
+```
