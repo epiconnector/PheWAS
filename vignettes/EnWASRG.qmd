@@ -256,8 +256,17 @@ exposure_vars <-
    xy = combDenwas |> dplyr::filter(LCL*UCL > 0) |>
     dplyr::top_n(20,abs(Estimate)) |> dplyr::arrange(dplyr::desc(Estimate))
 
-  
-  
+```
+
+Now develop some code for fitting a residual based model
+
+```{r}
+
+
+ combD2 = generic_enwas(data = allD, base_model = base_model, 
+                expvars = EVs, trans = "invnorm", useResiduals = TRUE)
+
+ 
   forestplot(labeltext = row.names(xy),
            mean = xy$Estimate,
            lower = xy$LCL,

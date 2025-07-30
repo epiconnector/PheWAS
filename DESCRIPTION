@@ -1,7 +1,7 @@
 Package: PheWAS
 Type: Package
 Title: A package to support PhenomeWide Association Studies in NHANES
-Version: 0.1.7
+Version: 0.1.9
 Author: Laha Ale, Robert Gentleman
 Maintainer: Laha Ale <ainilaha@gmail.com>
 Description: A set of tools to help explore relationships between phenotypes and outcomes.
