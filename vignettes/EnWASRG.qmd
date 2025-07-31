@@ -204,9 +204,34 @@ combModel <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) * RIAGENDR + race + obese + DMDEDU
 
 lmC = lm(formula=combModel, data=allD)
 summary(lmC)
+
+```
+
+### Testing submodels
+
+Now, we might want to ask what contribution each of the terms makes to the overall fit of the model.  We can use the likelihood ratio approach, or an F test to compare the sum of squared residuals from the fit with all variables in the model versus those with each one left out in turn.  The function `drop1` facilitates these computations. But, when the models contain interaction terms, as ours does, you need to do a little more work.
+  In the output below we see the effect of removing each variable, while retaining the others. The row labeled `<none>` is the full model.  Note that we can drop the interaction term between age and sex, but this function does not report on what happens if either age or sex are themselves removed.  That is because it does not make any sense to retain the interaction term if we drop a main effect, and so we would need to drop 2 terms - but the function only supports dropping one.
+   We can compute the appropriate tests by hand and then use the `anova` function to compare. From the call to `drop1` we can see that `Cycle` has the smallest F statistic, and that suggests that it is probably not having a big effect on our estimates. We note that the F statistic for leaving out age is close to double that of any other variable indicating the strength of the relationship between age and systolic blood pressure.  The reduction in residual sum of squares from including gender is actually quite small relative to the effects of removing other variables.
+
+```{r drop1}
 drop1(lmC, test= "F")
 
+noAgeM <- 'SYSTOLIC ~ RIAGENDR + race + obese + DMDEDUC2 + lowincome + Cycle'
 
+lmnoA = lm(formula=noAgeM, data=allD)
+
+anova(lmnoA, lmC)
+
+noSexM = 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) + race + obese + DMDEDUC2 + lowincome + Cycle'
+lmnoS = lm(formula = noSexM, data = allD)
+
+anova(lmnoS, lmC)
+
+```
+
+## Assess model fit
+
+```{r modelFit}
 ##look at residuals from this model
 # Example data
 
