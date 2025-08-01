@@ -76,6 +76,7 @@ library(latticeExtra)
 library(metafor)
 library(randomForest)
 library(forestplot)
+library(kableExtra)
 ```
 
 # Baseline model and exposure variables
@@ -213,24 +214,44 @@ Now, we might want to ask what contribution each of the terms makes to the overa
    We can compute the appropriate tests by hand and then use the `anova` function to compare. From the call to `drop1` we can see that `Cycle` has the smallest F statistic, and that suggests that it is probably not having a big effect on our estimates. We note that the F statistic for leaving out age is close to double that of any other variable indicating the strength of the relationship between age and systolic blood pressure.  The reduction in residual sum of squares from including gender is actually quite small relative to the effects of removing other variables.
 
 ```{r basemodel}
+## FIXME - Deepayan, can you look at the anova stuff - I think we want some
+## sort of helper function to get the AIC etc - or perhaps just drop that
+## also the df for both age and sex includes the 5 terms from spline(age):sex
+## I think that is right, as you have to drop both 
 
 combModel <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) * RIAGENDR + race + obese + DMDEDUC2 + lowincome + Cycle'
 
-lmC = lm(formula=combModel, data=allD)
-summary(lmC)
 
-drop1(lmC, test= "F")
+lmC = lm(formula=combModel, data=allD)
+
+kable(summary(lmC)$coefficients)
+
+## or we could just drop the "heading" attribute
+ftesttable = data.frame(drop1(lmC, test= "F"))
 
 noAgeM <- 'SYSTOLIC ~ RIAGENDR + race + obese + DMDEDUC2 + lowincome + Cycle'
 
 lmnoA = lm(formula=noAgeM, data=allD)
 
-anova(lmnoA, lmC)
+agemM = data.frame(anova(lmnoA, lmC))
+mAIC = extractAIC(lmnoA)
+subv = c(agemM[2, c(3,4,2)], mAIC[2], agemM[2, 5:6])
+names(subv) = names(ftesttable)
+ftesttable = rbind(ftesttable, "age*" = subv)
 
 noSexM = 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) + race + obese + DMDEDUC2 + lowincome + Cycle'
 lmnoS = lm(formula = noSexM, data = allD)
 
-anova(lmnoS, lmC)
+##probably want a function to do this - so it is not so kludgy
+sexM = data.frame(anova(lmnoS, lmC))
+mAIC = extractAIC(lmnoS)
+subv = c(sexM[2, c(3,4,2)], mAIC[2], sexM[2, 5:6])
+names(subv) = names(ftesttable)
+ftesttable = rbind(ftesttable, "sex*" = subv)
+ftesttable$"Pr..F." = round(ftesttable$"Pr..F.", digits=3)
+
+ftesttable |> kbl(caption = "Changes in Fit Dropping Terms") |>
+    kable_classic()
 
 ```
 
@@ -412,7 +433,8 @@ reorderRows <- function(x, FUN = mean, ...) x[order(apply(x, 1, FUN, ...)), ]
 reorderCols <- function(x, FUN = mean, ...) x[, order(apply(x, 2, FUN, ...))]
 ```
 
-```{r}
+```{r, eval=FALSE}
+##do we need these?
 #| fig-width: 6
 #| fig-height: 12
 ## sapply(e, getEstimate) |> heatmap()
@@ -420,7 +442,8 @@ sapply(e, getEstimate) |> reorderRows() |> reorderCols() |> t() |> levelplot()
 ```
 
 
-```{r}
+```{r, eval=FALSE}
+## needed?
 #| fig-width: 6
 #| fig-height: 12
 sapply(e, getTValue) |> reorderRows() |> reorderCols() |> t() |> levelplot()
