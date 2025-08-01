@@ -1,5 +1,8 @@
 ---
 title: 'EnWAS Meta-Analysis: Systolic BP'
+format:
+  html:
+    code-fold: true
 fig-width: 10
 fig-height: 8
 fig-format: svg
@@ -200,10 +203,6 @@ alldata = lapply(cycles, mergeNutrients)
 allD = do.call("rbind", alldata)
 allD$Cycle = rep(cycles, times=sapply(alldata, nrow))
 
-combModel <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) * RIAGENDR + race + obese + DMDEDUC2 + lowincome + Cycle'
-
-lmC = lm(formula=combModel, data=allD)
-summary(lmC)
 
 ```
 
@@ -213,7 +212,13 @@ Now, we might want to ask what contribution each of the terms makes to the overa
   In the output below we see the effect of removing each variable, while retaining the others. The row labeled `<none>` is the full model.  Note that we can drop the interaction term between age and sex, but this function does not report on what happens if either age or sex are themselves removed.  That is because it does not make any sense to retain the interaction term if we drop a main effect, and so we would need to drop 2 terms - but the function only supports dropping one.
    We can compute the appropriate tests by hand and then use the `anova` function to compare. From the call to `drop1` we can see that `Cycle` has the smallest F statistic, and that suggests that it is probably not having a big effect on our estimates. We note that the F statistic for leaving out age is close to double that of any other variable indicating the strength of the relationship between age and systolic blood pressure.  The reduction in residual sum of squares from including gender is actually quite small relative to the effects of removing other variables.
 
-```{r drop1}
+```{r basemodel}
+
+combModel <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) * RIAGENDR + race + obese + DMDEDUC2 + lowincome + Cycle'
+
+lmC = lm(formula=combModel, data=allD)
+summary(lmC)
+
 drop1(lmC, test= "F")
 
 noAgeM <- 'SYSTOLIC ~ RIAGENDR + race + obese + DMDEDUC2 + lowincome + Cycle'
@@ -250,15 +255,7 @@ boxplot(lmC$residuals ~ age_group, main = "Large Model")
 
 
 
-```{r smallermodel}
-
-combSmall <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) + RIAGENDR + race + obese + DMDEDUC2 + lowincome + Cycle'
-
-lmSmall = lm(formula=combSmall, data=allD)
-summary(lmSmall)
-drop1(lmSmall, test="F")
-
-boxplot(lmSmall$residuals ~ age_group, main="Reduced Model")
+```{r enwasComb}
 
 exposure_vars <-
     c("SEQN", "DR1DRSTZ", "DRDINT", "DRQSPREP","DR1TNUMF", "DR1TKCAL", "DR1TPROT",
@@ -279,27 +276,30 @@ exposure_vars <-
  # colnames(xx)[c(1,6,7)] = c("estimate", "lower", "upper")
   
    xy = combDenwas |> dplyr::filter(LCL*UCL > 0) |>
-    dplyr::top_n(20,abs(Estimate)) |> dplyr::arrange(dplyr::desc(Estimate))
+    dplyr::top_n(10,abs(Estimate)) |> dplyr::arrange(dplyr::desc(Estimate))
 
-```
-
-Now develop some code for fitting a residual based model
-
-```{r}
-
-
- combD2 = generic_enwas(data = allD, base_model = base_model, 
-                expvars = EVs, trans = "invnorm", useResiduals = TRUE)
-
- 
-  forestplot(labeltext = row.names(xy),
+     forestplot(labeltext = row.names(xy),
            mean = xy$Estimate,
            lower = xy$LCL,
            upper = xy$UCL,
            zero = 0, boxsize = 0.2,
            xlog = FALSE)
  
-           
+```
+
+## Discussion of an alternative fitting approach
+
+As noted above we can consider the EnWAS approach as a way to essentially *condition* on the risk factors and other features included in the base-line model. Then, for each exposure in turn we fit a separate model and then examine the size of the effect on outcome for that exposure.  An alternative to fitting the base-line model plus exposure is to instead first compute the residuals from the fit to the base-line model with no exposures and then use that as the response.  This simplifies the computations and if the exposures are orthogonal to the variables in the base-line model then one would actually get the same estimates.  This approach is widely used in GWAS and genetics applications mostly because the data sets are often in the hundreds of thousands to millions of observations and the computations are too expensive and time consuming.  We provide an option to do this and the plot below compares the estimates obtained for each exposure between re-fitting the regression each time to the approach that fits a regression to the residuals of the base-line model and the exposures. as you can see there is very little difference.
+
+```{r}
+
+ combD2 = generic_enwas(data = allD, base_model = base_model, 
+                expvars = EVs, trans = "invnorm", useResiduals = TRUE)
+
+ 
+
+ plot(combDenwas$Estimate, combD2$Estimate, main="Comparison of Two Fitting Approaches", 
+      ylab = "Use Residuals", xlab  = "Refit Regression")          
      
 
 ```
@@ -430,14 +430,24 @@ sapply(e, getTValue) |> reorderRows() |> reorderCols() |> t() |> levelplot()
 
 Here we want to consider some tools that might help us understand what the relationship is between the risk factors included in the baseline model and the nutritional features included in the EnWAS.  If any of the nutritional features are highly related to a known risk factor then we would have some amount of confounding.
 
-We will use machine learning and in particular Random Forests, since they are relatively easy to set up and are quite good methods for understanding prediction.
-We look at predicting race and obesity. Show that the OOB error rates are pretty high, suggesting that there might not be a large amount of signal in the nutrient amounts regarding the risk factors we conditioned on.
 
 ```{r rfforRace}
 d1 = allD[, EVs]
+d1 = apply(d1, 2, invNorm)
+
 m1rf = randomForest(as.factor(allD$race) ~ ., data = d1)
+varImpPlot(m1rf, n.var = 10, main="Predicting Race")
+
+```
+
+We will use machine learning and in particular Random Forests, since they are relatively easy to set up and are quite good methods for understanding prediction.
+We look at predicting race and obesity. Show that the OOB error rates are pretty high, suggesting that there might not be a large amount of signal in the nutrient amounts regarding the risk factors we conditioned on.  We apply the inverse normal rank transformation to each exposure separately, since that is how they were fit in the EnWAS carried out above. When predicting race the out-of-bag error rate is `r round(m1rf$err.rate[nrow(m1rf$err.rate), "OOB"], digits=3)`.
+
+```{r obeseRF}
 
 ##it seems randomForests doesn't treat logical vectors as factors...
 m2rf = randomForest(as.factor(allD$obese) ~ ., data=d1)
-
+varImpPlot(m2rf, n.var=10, main=" Predicting Obesity")
 ```
+
+In this second example we predict obesity (BMI>30) and find the out-of-bag error rate is `r round(m2rf$err.rate[nrow(m1rf$err.rate), "OOB"], digits=3)`.
