@@ -255,6 +255,34 @@ ftesttable |> kbl(caption = "Changes in Fit Dropping Terms") |>
 
 ```
 
+### Examine Age and Sex interactions (by race)
+
+From the analysis of the effects of dropping different terms we see that there are pretty substantial effects due to age, sex and as indicated by our research there does seem to be a pretty substantial interaction between them affecting systolic blood pressure.  We can examine estimates of the effects using the fitted model.  We will set race to `White`, use cycle `_J`, education at `HS`, obese to be false and low income to be false.  We can see that the interaction is quite strong, with women having lower blood pressure at younger ages but on average overtaking men after sixty and then having higher blood pressure in their later years.  Systolic blood pressure is higher for blacks, than whites.  We did not explore other higher level interactions, which certainly could be present in the data and a more complete attempt at modeling might try to uncover whether there are substantial interctions that should also be accounted for.
+
+```{r predictionofAgeSex}
+ ##first predict males
+  yvals = seq(31, 79,by=1)
+  dfpred1 = data.frame(RIDAGEYR=yvals, RIAGENDR=rep("Male", 49), obese=rep(FALSE, 49), DMDEDUC2=rep("HS", 49), race=rep("White", 49), Cycle = rep("_J", 49), lowincome=rep(FALSE, 49))
+
+    dfpred1B = data.frame(RIDAGEYR=yvals, RIAGENDR=rep("Male", 49), obese=rep(FALSE, 49), DMDEDUC2=rep("HS", 49), race=rep("Black", 49), Cycle = rep("_J", 49), lowincome=rep(FALSE, 49))
+
+  dfpred2 = data.frame(RIDAGEYR=yvals, RIAGENDR=rep("Female", 49), obese=rep(FALSE, 49), DMDEDUC2=rep("HS", 49), race=rep("White", 49), Cycle = rep("_J", 49), lowincome=rep(FALSE, 49))
+  dfpred2B = data.frame(RIDAGEYR=yvals, RIAGENDR=rep("Female", 49), obese=rep(FALSE, 49), DMDEDUC2=rep("HS", 49), race=rep("Black", 49), Cycle = rep("_J", 49), lowincome=rep(FALSE, 49))
+
+  predVM = predict(lmC, newdata=dfpred1)
+  predVMB = predict(lmC, newdata = dfpred1B)
+  predVF = predict(lmC, newdata=dfpred2)
+   predVFB = predict(lmC, newdata=dfpred2B)
+  # lines(40:85, predV)
+  plot(31:79, predVF, type="l", xlab="Age", ylab = "Systolic BP", 
+       main="Age by Sex Interaction", ylim=c(100,150),lwd=2)
+  lines(31:79, predVM, col="skyblue", lwd=2)
+  lines(31:79, predVMB, col="green", lwd=2)
+  lines(31:79, predVFB, col="red", lwd=2)
+ legend("topleft", c("WM", "WF", "BM", "BF"), col=c("black", "skyblue","green", "red"),
+        lwd=2)
+```
+
 ## Assess model fit
 
 ```{r modelFit}

@@ -14,8 +14,8 @@ summarize_var <- function(var, base_model, data, trans = c("none", "log", "invno
                 log = sprintf("log(%s)", var), # some have 0 values
                 invnorm = sprintf("invNorm(%s)", var))
   fm <- lm(paste0(base_model, " + ", var), data = data)
-  ## print(fm)
-  coef(summary(fm))[var, ]
+  smf = summary(fm)
+  c(coef(summary(fm))[var, ], r.squared = smf$r.squared)
 }
 
 ## a version that uses the residuals from the baseline model
@@ -26,7 +26,8 @@ summarize_varR = function (var, data, trans = c("none", "log", "invnorm"))
     var <- switch(trans, none = var, log = sprintf("log(%s)", 
         var), invnorm = sprintf("invNorm(%s)", var))
     fm <- lm(paste0("Residuals ~", var), data = data)
-    coef(summary(fm))[var, ]
+    smf = summary(fm)
+    c(coef(summary(fm))[var, ], r.squared = smf$r.squared)
 }
 
 add_rownames <- function(d, var = "rownames")
@@ -35,6 +36,25 @@ add_rownames <- function(d, var = "rownames")
   d
 }
 
+#' Generic EnWAS 
+#'
+#' @param data data.frame that the base_model was fit to and all exposures
+#' @param base_model character representation of the base_model
+#' @param expvars vector of the names of the exposures to be analyzed
+#' @param useResiduals logical vector indicating whether or not to fit the model to the residuals from the base_model fit
+#'
+#' @details
+#' This function examines the effects of the exposures listed in `expvars` in a model that is described by the `base_model`.
+#' It uses an internal function to perform per variable regressions and returns a data.frame with summary statistics for 
+#' each of those fits. If `useResiduals=TRUE` then the base model is fit, and the residuals obtained, each regression is
+#' then against those residuals. If `useResiduals=FALSE` then for each exposure the model is augmented by that exposure and
+#' fit.
+#'
+#' @return A data.frame where each row consists of a set of summary statistics for each exposure variable.
+#'  The estimates from the model, upper and lower confidence bounds (UCL and LCL), BH adjusted p-values and
+#' the multiple Rsquared value from the regression that was performed for that variable (either whole model or
+#' against the residuals).
+#'
 generic_enwas <- function(data, base_model, expvars, ..., useResiduals=FALSE)
 {
   if( useResiduals) {
