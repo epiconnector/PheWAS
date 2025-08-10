@@ -219,8 +219,15 @@ Now, we might want to ask what contribution each of the terms makes to the overa
 ## also the df for both age and sex includes the 5 terms from spline(age):sex
 ## I think that is right, as you have to drop both 
 
+##I did test RIAGENDR*race, and ns(RIDAGEYR, df = 5) * RIAGENDR*race and nothing
+## seemed significant - also obese*race - which came close
+
 combModel <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) * RIAGENDR + race + obese + DMDEDUC2 + lowincome + Cycle'
 
+## this looks for race by obesity interactions - but finds none so is
+## omitted for now
+#c2 <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) * RIAGENDR + race*obese + DMDEDUC2 + lowincome + Cycle'
+#lm2 <-  lm(formula=c2, data=allD)
 
 lmC = lm(formula=combModel, data=allD)
 
@@ -229,13 +236,18 @@ kable(summary(lmC)$coefficients)
 ## or we could just drop the "heading" attribute
 ftesttable = data.frame(drop1(lmC, test= "F"))
 
+## check using obese
+#noObeseM <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) * RIAGENDR + race + DMDEDUC2 + lowincome + Cycle'
+#lmNOb = lm(formula= noObeseM, data=allD)
+#data.frame(anova(lmNOb, lmC))
+
 noAgeM <- 'SYSTOLIC ~ RIAGENDR + race + obese + DMDEDUC2 + lowincome + Cycle'
 
 lmnoA = lm(formula=noAgeM, data=allD)
 
 agemM = data.frame(anova(lmnoA, lmC))
 mAIC = extractAIC(lmnoA)
-subv = c(agemM[2, c(3,4,2)], mAIC[2], agemM[2, 5:6])
+subv = c(agemM[2, c(3,4)], agemM[1,2], mAIC[2], agemM[2, 5:6])
 names(subv) = names(ftesttable)
 ftesttable = rbind(ftesttable, "age*" = subv)
 
@@ -245,7 +257,7 @@ lmnoS = lm(formula = noSexM, data = allD)
 ##probably want a function to do this - so it is not so kludgy
 sexM = data.frame(anova(lmnoS, lmC))
 mAIC = extractAIC(lmnoS)
-subv = c(sexM[2, c(3,4,2)], mAIC[2], sexM[2, 5:6])
+subv = c(sexM[2, c(3,4)], sexM[1,2], mAIC[2], sexM[2, 5:6])
 names(subv) = names(ftesttable)
 ftesttable = rbind(ftesttable, "sex*" = subv)
 ftesttable$"Pr..F." = round(ftesttable$"Pr..F.", digits=3)
@@ -269,14 +281,14 @@ From the analysis of the effects of dropping different terms we see that there a
   dfpred2 = data.frame(RIDAGEYR=yvals, RIAGENDR=rep("Female", 49), obese=rep(FALSE, 49), DMDEDUC2=rep("HS", 49), race=rep("White", 49), Cycle = rep("_J", 49), lowincome=rep(FALSE, 49))
   dfpred2B = data.frame(RIDAGEYR=yvals, RIAGENDR=rep("Female", 49), obese=rep(FALSE, 49), DMDEDUC2=rep("HS", 49), race=rep("Black", 49), Cycle = rep("_J", 49), lowincome=rep(FALSE, 49))
 
-  predVM = predict(lmC, newdata=dfpred1)
-  predVMB = predict(lmC, newdata = dfpred1B)
-  predVF = predict(lmC, newdata=dfpred2)
-   predVFB = predict(lmC, newdata=dfpred2B)
+  predVM = predict(lmC, newdata=dfpred1) ##MW
+  predVMB = predict(lmC, newdata = dfpred1B) ##MB
+  predVF = predict(lmC, newdata=dfpred2) ##FW
+   predVFB = predict(lmC, newdata=dfpred2B) ##FB
   # lines(40:85, predV)
-  plot(31:79, predVF, type="l", xlab="Age", ylab = "Systolic BP", 
+  plot(31:79, predVM, type="l", xlab="Age", ylab = "Systolic BP", 
        main="Age by Sex Interaction", ylim=c(100,150),lwd=2)
-  lines(31:79, predVM, col="skyblue", lwd=2)
+  lines(31:79, predVF, col="skyblue", lwd=2)
   lines(31:79, predVMB, col="green", lwd=2)
   lines(31:79, predVFB, col="red", lwd=2)
  legend("topleft", c("WM", "WF", "BM", "BF"), col=c("black", "skyblue","green", "red"),
