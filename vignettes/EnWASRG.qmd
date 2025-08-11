@@ -204,6 +204,61 @@ alldata = lapply(cycles, mergeNutrients)
 allD = do.call("rbind", alldata)
 allD$Cycle = rep(cycles, times=sapply(alldata, nrow))
 
+allD$RIAGENDR = as.factor(allD$RIAGENDR)
+```
+
+```{r supportFuns}
+
+##chatGPT generated function to summarize the columns in a data.frame suitable 
+## putting through kable to get a Table.
+
+summarize_df <- function(df) {
+  dd = data.frame(
+    Column = names(df),
+    Type = sapply(df, function(col) {
+      if (is.logical(col)) {
+        "logical"
+      } else if (is.factor(col)) {
+        "factor"
+      } else if (is.numeric(col)) {
+        "numeric"
+      } else {
+        class(col)[1]
+      }
+    }),
+    Values = sapply(df, function(col) {
+       if (is.logical(col)) {
+        vals <- c("TRUE", "FALSE")
+        counts <- sapply(vals, function(v) sum(col == v, na.rm = TRUE))
+        paste(sprintf("%s (%d)", vals, counts), collapse = ", ")
+      } else if (is.factor(col)) {
+        vals <- levels(col)
+        counts <- sapply(vals, function(v) sum(col == v, na.rm = TRUE))
+        paste(sprintf("%s (%d)", vals, counts), collapse = ", ")
+      } else if (is.numeric(col)) {
+        rng <- range(col, na.rm = TRUE)
+        paste(signif(rng[1], 3), signif(rng[2], 3), sep = " – ")
+      } else {
+        NA
+      }
+    })
+  
+  )
+  return(dd)
+}
+
+
+```
+
+In Table XX we summarize the data over all the cycles.
+
+```{r table1}
+
+dt = summarize_df(allD[,c(1,4:9)])
+dt |>
+  kbl() |>
+  kable_material(c("striped", "hover"))
+
 
 ```
 
