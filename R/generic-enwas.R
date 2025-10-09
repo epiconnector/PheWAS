@@ -6,12 +6,13 @@
 ## - character vector of exposure variables
 
 ## add var to the model and get its coefficients from the lm
-summarize_var <- function(var, base_model, data, trans = c("none", "log", "invnorm"))
+summarize_var <- function(var, base_model, data, trans = c("none", "log", "sqrt","invnorm"))
 {
   trans <- match.arg(trans)
   var <- switch(trans,
                 none = var,
                 log = sprintf("log(%s)", var), # some have 0 values
+                sqrt = sprintf("sqrt(%s)", var), 
                 invnorm = sprintf("invNorm(%s)", var))
   fm <- lm(paste0(base_model, " + ", var), data = data)
   smf = summary(fm)
@@ -20,11 +21,14 @@ summarize_var <- function(var, base_model, data, trans = c("none", "log", "invno
 
 ## a version that uses the residuals from the baseline model
 ## so the model is much simpler
-summarize_varR = function (var, data, trans = c("none", "log", "invnorm")) 
+summarize_varR = function (var, data, trans = c("none", "log", "sqrt", "invnorm")) 
 {
     trans <- match.arg(trans)
-    var <- switch(trans, none = var, log = sprintf("log(%s)", 
-        var), invnorm = sprintf("invNorm(%s)", var))
+    var <- switch(trans, 
+                  none = var, 
+                  log = sprintf("log(%s)", var), 
+                  sqrt = sprintf("sqrt(%s)", var), 
+                  invnorm = sprintf("invNorm(%s)", var))
     fm <- lm(paste0("Residuals ~", var), data = data)
     smf = summary(fm)
     c(coef(summary(fm))[var, ], r.squared = smf$r.squared)
@@ -57,6 +61,13 @@ add_rownames <- function(d, var = "rownames")
 #'
 generic_enwas <- function(data, base_model, expvars, ..., useResiduals=FALSE)
 {
+  if( !is.character(expvars) ) 
+        stop("expvars must be the names of the variables")
+  notprovided = setdiff(expvars, names(data))
+  if( length(notprovided) > 0 ) 
+       stop(paste0("Variables not in data: ", 
+            paste(notprovided, collapse=", ")))
+
   if( useResiduals) {
      Residuals = lm(base_model, data = data)$residuals
      data$Residuals = Residuals

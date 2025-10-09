@@ -126,7 +126,8 @@ prepare_data_control <- function(data, agemin = 30, agemax = 80)
   nDEDUC[nDEDUC == "Don't Know"] = NA
   nDEDUC[nDEDUC == "Refused"] = NA
   nDEDUC = factor(nDEDUC)
-  levels(nDEDUC) = c("<HS", ">HS", "HS", "<HS", ">HS")
+  levels(nDEDUC) = c("<HS", ">HS", "HS", "<HS", ">HS") 
+  nDEDUC = factor(nDEDUC, levels=c("<HS", "HS", ">HS")) ##now order them appropriately for plotting
   base_df$DMDEDUC2 <- nDEDUC
   ## for poverty we will use a cutoff of 4 for INDFMPIR that gets close to the top 20% vs bottom 80%
   base_df$lowincome = base_df$INDFMPIR < 4
@@ -207,10 +208,11 @@ allD$Cycle = rep(cycles, times=sapply(alldata, nrow))
 allD$RIAGENDR = as.factor(allD$RIAGENDR)
 ```
 
-```{r supportFuns}
+
+```{r supportFuns, echo=FALSE}
 
 ##chatGPT generated function to summarize the columns in a data.frame suitable 
-## putting through kable to get a Table.
+## putting through kable to get a Table. Lightly edited...
 
 summarize_df <- function(df) {
   dd = data.frame(
@@ -244,19 +246,50 @@ summarize_df <- function(df) {
     })
   
   )
+  row.names(dd) = NULL
   return(dd)
 }
 
 
 ```
 
-In Table XX we summarize the data over all the cycles.
+## Look at some variables per cycle
+
+
+```{r cyclevars}
+cycle1 = alldata[[1]]
+agebydec = cut(cycle1$RIDAGEYR, breaks=seq(30,80, by=10))
+boxplot(cycle1$DR1TNUMF ~ cycle1$DMDEDUC2)
+boxplot(cycle1$DR1TNUMF ~cycle1$race)
+
+boxplot(cycle1$SYSTOLIC ~ agebydec)
+
+# not so revealing as the interaction terms
+#bwplot(SYSTOLIC ~ RIAGENDR | agebydec,
+#       layout = c(3,2),   # 5 panels (one for each age group)
+#       xlab = "Sex",
+#       ylab = "Systolic BP",
+#       main = "SysBP by Sex within Age Groups", data=cycle1)
+
+subcyc1 = cycle1[,c(1,4,5,6,7,8,9, 16)]
+rfx = randomForest(DR1TNUMF ~ . , data=subcyc1, importance=TRUE, proximity=TRUE)
+
+round(importance(rfx), 2)
+
+```
+
+<!-- -->
+
+<!-- resume -->
+
+In Table \@ref(table1) we summarize the variables used in our base model, using data combined over all cycles used for modeling.
 
 ```{r table1}
 
 dt = summarize_df(allD[,c(1,4:9)])
 dt |>
-  kbl() |>
+  kbl(caption = "Regression Coefficients from the Base Model",
+      label = "table1") |>
   kable_material(c("striped", "hover"))
 
 
@@ -286,7 +319,9 @@ combModel <- 'SYSTOLIC ~ ns(RIDAGEYR, df = 5) * RIAGENDR + race + obese + DMDEDU
 
 lmC = lm(formula=combModel, data=allD)
 
-kable(summary(lmC)$coefficients)
+kable(summary(lmC)$coefficients,
+      caption = "Regression Coefficients from the Base Model",
+      label = "regcoef")
 
 ## or we could just drop the "heading" attribute
 ftesttable = data.frame(drop1(lmC, test= "F"))
@@ -384,7 +419,126 @@ exposure_vars <-
       "DR1TS160", "DR1TS180", "DR1TM161", "DR1TM181", "DR1TM201", "DR1TP183",
       "DR1TP204")
  EVs <- exposure_vars[c(-1,-2,-3,-4)]
- 
+```
+
+## Examine Exposures
+
+One of the issues we will face in trying to model a broad collection of environmental variables which are generally measured in very different units and are sometimes discrete and sometimes continuous is to understand how much *information* they contain.  We will consider using transformations of the data, but these can impact the analysis in unwanted ways. We cannot use the variance, as we might if all variables were measured on a comparable scale. Instead we will try to use Shannon Information (cite) and to obtain this for continuous features we will coarsen them.
+
+### Units for the Exposure variables
+
+Both the exposure variable and the units that it was measured in are usually reported in the SAS Label. We will want to know what those are for some of our interpretation.
+
+```{r getUnits}
+## this gets the units for one cycle - we probably want to get them for all cycles and make sure nothing changes - needs to be checked - loop over all _X
+cb1 = nhanesCodebook("DR1TOT_C")
+cb1 = cb1[EVs]
+units = sapply(cb1, \(x) sub(".*\\(([^()]*)\\)\\s*$", "\\1", x$`SAS Label:`))
+
+## Laha - here is an Epimind part - I filed an issue - 
+               
+
+```
+
+This information can then be used to look up, or use a LLM, to identify the sustained change in consumption that would yield a likely change in phenotype.
+
+Using this prompt: *What change in daily kCal consumption for an. adult would likely result in a change in phenotype?*. I obtained the response that about a 100-200 sustained change in calorie intake would have long term impacts on phentotype.  We would like to obtain reliable estimates of these changes for all the different dietary factors in order to get an idea of what changes might impact the phenotype of the host.
+
+To answer this one probably wants to use some sort of standard metabolic rate, rather than BMI. 
+The most widely used modern formula to estimate the basal metabolic rate is the Mifflin–St Jeor equation:
+\[
+\text{BMR}_{\text{male}} = 10W + 6.25H - 5A + 5
+\]
+
+\[
+\text{BMR}_{\text{female}} = 10W + 6.25H - 5A - 161
+\]
+
+\text{where:}
+\begin{align*}
+W & = \text{body weight (kg)} \\
+H & = \text{height (cm)} \\
+A & = \text{age (years)}
+\end{align*}
+
+And this could be combined with activity levels to get a more accurate per person estimate.
+\[
+\text{TEE} = \text{BMR} \times \text{AF}
+\]
+
+\text{where } \text{AF} \text{ is the activity factor:}
+\begin{cases}
+1.2 & \text{sedentary} \\
+1.375 & \text{lightly active} \\
+1.55 & \text{moderately active} \\
+1.725 & \text{very active} \\
+1.9 & \text{extra active}
+\end{cases}
+
+Adjusting for these quantities could be helpful.
+
+### Entropy
+
+Entropy *per* *se* is not enough to understand which features might be valuable, but features with very low entropy are unlikely to be useful and features with very high entropy probably should be examined.
+
+If $X$ and $Y$ are Gaussian random variables with correlation $\rho$ then the mutual information, $I(X,Y)$ is given by 
+$$
+ I(X,Y) = -1/2 \cdot \ln (1− \rho^2).
+$$
+And we can see that the larger correlation is associated with larger mutual information. We can show that there is a relationship between $I(X,Y)$ and the entropy of $X$ and the entropy of $Y$.
+$$
+  0 \leq I(X,Y) \leq \min (H(X), H(Y))
+$$
+So, if a feature, $X$ has a small entropy then it likely has a small mutual information with the response $Y$.  This is related to the notion that if all features are measured on the same scale, and approximately Normally distributed we might filter them on variance.  For a univariate Normal  $X \sim N(\mu, \sigma^2)$ the differential entropy is $H(X)=0.5 \cdot \ln(2 \pi e \sigma^2)$.
+And hence depends only on $\sigma$.
+
+When computing approximations to the differential entropy (i.e. computed from the density function) with binning then the bin size matters.  If we let $\Delta$ be the bin size, and $H_\Delta (X)$ be the binned entropy then the following approximation relates $H_\Delta (X)$ to $H(X)$:
+$$
+  H(X) \approx H_\Delta (X) - \log \left( \frac{1}{\Delta} \right)
+$$
+This, while interesting, unfortunately leaves us with the challenge that not all features are measured in the same units and variance is dependent on the scaling.  If we change units (e.g. feet to inches) the variance changes in a systematic way.  Thus filtering on variance remains challenging.
+
+### A different perspective
+
+If an exposure you are interested in are well predicted by the features used in the baseline model then it is unlikely to add much to your explanation of the response.  This observation can be made somewhat explicit under different sets of assumptions. One way of trying to assess that is to choose a fairly flexible machine learning model, e.g. random forests, and use it to try and predict some, or all of the EnWAS features. If any are well predicted, then they would probably not be of interest.
+
+NEW IDEA: What if we do inv normal rank transform, then get the scaling - so we should be able to get an approximate estimate of what a one SD change is in the original units - and then we could ask whether we believe that the one SD change was actually relevant.
+
+```{r}
+EVdata = allD[,EVs]
+
+library(entropy)
+
+ myfun = function(x, numBins = 100) {
+   if(length(unique(x)) < numBins ) return(table(x)) else
+     return(discretize(x, numBins))
+ }
+
+
+
+##now EVbinned is a list of tables 
+EVbinned = lapply(EVdata, myfun)
+ents = sapply(EVbinned, entropy)
+
+## try on invNorm
+
+EVin = lapply(EVdata, invNorm)
+EVinB = lapply(EVin, myfun)
+ents2 = sapply(EVinB, entropy)
+
+EVsqrt = sqrt(EVdata)
+EVsqrtb = lapply(EVsqrt, myfun)
+entsqrt = sapply(EVsqrtb, entropy)
+
+lmEVvsCycle = vector("list", length= length(EVdata))
+for(i in 1:length(EVdata)) {
+  lmEVvsCycle[[i]] = summary(lm(EVdata[,i] ~ allD$Cycle))
+}
+```
+
+## EnWAS
+
+```{r}
  ##now we have fit all of these.
   combDenwas = generic_enwas(data = allD, base_model = base_model, 
                 expvars = EVs, trans = "invnorm")
@@ -405,7 +559,17 @@ exposure_vars <-
 
 ## Discussion of an alternative fitting approach
 
-As noted above we can consider the EnWAS approach as a way to essentially *condition* on the risk factors and other features included in the base-line model. Then, for each exposure in turn we fit a separate model and then examine the size of the effect on outcome for that exposure.  An alternative to fitting the base-line model plus exposure is to instead first compute the residuals from the fit to the base-line model with no exposures and then use that as the response.  This simplifies the computations and if the exposures are orthogonal to the variables in the base-line model then one would actually get the same estimates.  This approach is widely used in GWAS and genetics applications mostly because the data sets are often in the hundreds of thousands to millions of observations and the computations are too expensive and time consuming.  We provide an option to do this and the plot below compares the estimates obtained for each exposure between re-fitting the regression each time to the approach that fits a regression to the residuals of the base-line model and the exposures. as you can see there is very little difference.
+As noted above we can consider the EnWAS approach as a way to essentially *condition* on the risk factors and other features included in the base-line model. Then, for each exposure in turn we fit a separate model and then examine the size of the effect on outcome for that exposure.  An alternative to fitting the base-line model plus exposure is to instead first compute the residuals from the fit to the base-line model with no exposures and then use that as the response.  This simplifies the computations and if the exposures are orthogonal to the variables in the base-line model then one would actually get the same estimates.  This approach is widely used in GWAS and genetics applications mostly because the data sets are often in the hundreds of thousands to millions of observations and the computations are too expensive and time consuming.  We provide an option to do this and the plot below compares the estimates obtained for each exposure between re-fitting the regression each time to the approach that fits a regression to the residuals of the base-line model and the exposures. As you can see there is very little difference in the slope estimates. However, most of the other statistics are not the same.
+
+```{r checkQR}
+Q <- qr.Q(lmC$qr)
+## 
+Z = matrix(allD$DR1TNUMF, ncol=1)
+Zproj <- Z - Q %*% (t(Q) %*% Z)
+
+lmtest = lm(lmC$residuals ~ Zproj)
+
+```
 
 ```{r}
 
@@ -413,13 +577,26 @@ As noted above we can consider the EnWAS approach as a way to essentially *condi
                 expvars = EVs, trans = "invnorm", useResiduals = TRUE)
 
  
+combD3 = generic_enwas(data = allD, base_model = base_model, 
+                expvars = EVs, trans = "none", useResiduals = TRUE)
 
- plot(combDenwas$Estimate, combD2$Estimate, main="Comparison of Two Fitting Approaches", 
+ plot(combDenwas$Estimate, combD2$Estimate, main="Comparison of Two Fitting Approaches: Estimate", 
       ylab = "Use Residuals", xlab  = "Refit Regression")          
      
+plot(combDenwas$`Std. Error`, combD2$`Std. Error`, main="Comparison of Two Fitting Approaches: StD", 
+      ylab = "Use Residuals", xlab  = "Refit Regression", asp=1)          
 
 ```
 
+### Use the sqrt transformation
+
+In order to get parameter estimates that match the information theory part above.
+
+```{r sqrttrans}
+combDsqrt = generic_enwas(data=allD, base_model=base_model, expvars = EVs,
+                          trans="sqrt", useResiduals=FALSE)
+
+```
 
 ```{r}
 #| echo: FALSE
@@ -443,9 +620,13 @@ evalBase <- function(df_merged)
 eBase <- sapply(alldata, evalBase, simplify=FALSE)
 
 sapply(eBase, function(x) summary(x)$r.squared)
-sapply(eBase, function(x) summary(x)$coefficients["obeseTRUE",1])
-sapply(eBase, function(x) summary(x)$coefficients["raceWhite",1])
-sapply(eBase, function(x) summary(x)$coefficients["raceBlack",1])
+
+par(mfrow=c(2,2))
+hist(sapply(eBase, function(x) summary(x)$coefficients["obeseTRUE",1]), main="Obese")
+hist(sapply(eBase, function(x) summary(x)$coefficients["raceWhite",1]), main="White")
+hist(sapply(eBase, function(x) summary(x)$coefficients["raceBlack",1]), main="Black")
+hist(sapply(eBase, function(x) summary(x)$coefficients["RIAGENDRMale",1]), main="Male")
+
 
 ```
 
@@ -513,7 +694,26 @@ mkFP = function(DATA, var) {
 
 mkFP(byEV[[1]], names(byEV[1]))
 
+## assemble the estimate using all data, the meta analysis estimate as well as the per sample estimates
 
+numF = byEV[[1]]
+colnames(numF)
+##[1] "Estimate"   "Std. Error" "t value"    "Pr(>|t|)"   "r.squared"  "EV"         "LCL"       
+##[8] "UCL"        "adj_pval"  
+
+metaF = metaEV[[1]]
+names(metaF)
+##copied over
+z = numF[1,]
+z$Estimate = -0.5632; z$LCL = -0.7762; z$UCL = -0.3502; z$`Pr(>|t|)`=0.001
+
+tt = rbind(numF, Meta = z, EnWAS = combDenwas[1,])
+ forestplot(labeltext = row.names(tt),
+           mean = tt$Estimate,
+           lower = tt$LCL,
+           upper = tt$UCL,
+           zero = 0, boxsize = 0.2,
+           xlog = FALSE)
 ```
 
 
@@ -546,10 +746,11 @@ sapply(e, getTValue) |> reorderRows() |> reorderCols() |> t() |> levelplot()
 
 ## Explore relationship between risk factors and EnWAS features
 
-Here we want to consider some tools that might help us understand what the relationship is between the risk factors included in the baseline model and the nutritional features included in the EnWAS.  If any of the nutritional features are highly related to a known risk factor then we would have some amount of confounding.
+Here we want to consider some tools that might help us understand what the relationship is between the risk factors included in the baseline model and the nutritional features included in the EnWAS.  If any of the nutritional features are highly correlated with a known risk factor then we could have confounding.
 
+We look to see if the risk factors can be predicted from the nutrition variables using RandomForests (citeRF).  RandomForests are a reliable easy to use machine learning tool.  All environment variables are transformed via the inverse normal rank transformation and we first examine a variable importance plot. We also estimate the prediction accuracy using the out-of-bag error rate.  The out-of-bag error rate is computed on a per-tree basis and is the prediction error rate for samples not used to build a tree averaged over all trees in the forest. Hence, it is an unbiased error rate in the sense that we predict the class of an individual using a tree that did not use that observation.
 
-```{r rfforRace}
+```{r rfforRace, eval=FALSE}
 d1 = allD[, EVs]
 d1 = apply(d1, 2, invNorm)
 
@@ -558,14 +759,76 @@ varImpPlot(m1rf, n.var = 10, main="Predicting Race")
 
 ```
 
-We will use machine learning and in particular Random Forests, since they are relatively easy to set up and are quite good methods for understanding prediction.
-We look at predicting race and obesity. Show that the OOB error rates are pretty high, suggesting that there might not be a large amount of signal in the nutrient amounts regarding the risk factors we conditioned on.  We apply the inverse normal rank transformation to each exposure separately, since that is how they were fit in the EnWAS carried out above. When predicting race the out-of-bag error rate is `r round(m1rf$err.rate[nrow(m1rf$err.rate), "OOB"], digits=3)`.
+With a confusion matrix:
+```{r confmatR, echo=FALSE, eval=FALSE}
 
-```{r obeseRF}
+m1rf$confusion |>
+  kbl(caption = "Confusion Matrix for Race Prediction",
+      label = "tablecmR") |>
+  kable_material(c("striped", "hover"))
+
+
+```
+
+We look at predicting race and obesity. Show that the OOB error rates are pretty high, suggesting that there might not be a large amount of signal in the nutrient amounts regarding the risk factors we conditioned on. When predicting race the out-of-bag error rate is <r round(m1rf$err.rate[nrow(m1rf$err.rate), "OOB"], digits=3)>.
+
+```{r obeseRF, eval=FALSE}
 
 ##it seems randomForests doesn't treat logical vectors as factors...
 m2rf = randomForest(as.factor(allD$obese) ~ ., data=d1)
 varImpPlot(m2rf, n.var=10, main=" Predicting Obesity")
 ```
 
-In this second example we predict obesity (BMI>30) and find the out-of-bag error rate is `r round(m2rf$err.rate[nrow(m1rf$err.rate), "OOB"], digits=3)`.
+And the confusion matrix is given below.
+```{r confmOb, eval=FALSE}
+m2rf$confusion |>
+  kbl(caption = "Confusion Matrix for Obesity Prediction",
+      label = "tablecmR") |>
+  kable_material(c("striped", "hover"))
+```
+
+In this second example we predict obesity (BMI>30) and find the out-of-bag error rate is <r round(m2rf$err.rate[nrow(m1rf$err.rate), "OOB"], digits=3)>.
+
+
+## Appendix
+
+### Standard Metabolic Rate
+
+To answer this one probably wants to use some sort of standard metabolic rate, rather than BMI. 
+The most widely used modern formula to estimate the basal metabolic rate is the Mifflin–St Jeor equation:
+\[
+\text{BMR}_{\text{male}} = 10W + 6.25H - 5A + 5
+\]
+
+\[
+\text{BMR}_{\text{female}} = 10W + 6.25H - 5A - 161
+\]
+
+\text{where:}
+\begin{align*}
+W & = \text{body weight (kg)} \\
+H & = \text{height (cm)} \\
+A & = \text{age (years)}
+\end{align*}
+
+And this could be combined with activity levels to get a more accurate per person estimate.
+\[
+\text{TEE} = \text{BMR} \times \text{AF}
+\]
+
+\text{where } \text{AF} \text{ is the activity factor:}
+\begin{cases}
+1.2 & \text{sedentary} \\
+1.375 & \text{lightly active} \\
+1.55 & \text{moderately active} \\
+1.725 & \text{very active} \\
+1.9 & \text{extra active}
+\end{cases}
+
+Adjusting for these quantities could be helpful.
+
+### Physical Fitness Scores
+
+http://medbox.iiab.me/modules/en-cdc/www.cdc.gov/nchs/tutorials/PhysicalActivity/Preparing/PAQ/index.htm
+
+redo the above here in R so they can feed in to the metabolic stuff - maybe put into a Phonto Vignette
