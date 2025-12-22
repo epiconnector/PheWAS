@@ -12,7 +12,7 @@ summarize_var <- function(var, base_model, data, trans = c("none", "log", "sqrt"
   var <- switch(trans,
                 none = var,
                 log = sprintf("log(%s)", var), # some have 0 values
-                sqrt = sprintf("sqrt(%s)", var), 
+                sqrt = sprintf("sqrt(%s)", var),
                 invnorm = sprintf("invNorm(%s)", var))
   fm <- lm(paste0(base_model, " + ", var), data = data)
   smf = summary(fm)
@@ -21,13 +21,13 @@ summarize_var <- function(var, base_model, data, trans = c("none", "log", "sqrt"
 
 ## a version that uses the residuals from the baseline model
 ## so the model is much simpler
-summarize_varR = function (var, data, trans = c("none", "log", "sqrt", "invnorm")) 
+summarize_varR = function (var, data, trans = c("none", "log", "sqrt", "invnorm"))
 {
     trans <- match.arg(trans)
-    var <- switch(trans, 
-                  none = var, 
-                  log = sprintf("log(%s)", var), 
-                  sqrt = sprintf("sqrt(%s)", var), 
+    var <- switch(trans,
+                  none = var,
+                  log = sprintf("log(%s)", var),
+                  sqrt = sprintf("sqrt(%s)", var),
                   invnorm = sprintf("invNorm(%s)", var))
     fm <- lm(paste0("Residuals ~", var), data = data)
     smf = summary(fm)
@@ -40,50 +40,72 @@ add_rownames <- function(d, var = "rownames")
   d
 }
 
-#' Generic EnWAS 
+summarize_varGAM = function (var, base_model, data, trans = c("none", "log", "sqrt",
+                                                              "invnorm"))
+{
+  trans <- match.arg(trans)
+  var <- switch(trans, none = var, log = sprintf("log(%s)",
+                                                 var), sqrt = sprintf("sqrt(%s)", var), invnorm = sprintf("invNorm(%s)",
+                                                                                                          var))
+  fm <- gam(formula = as.formula(paste0(base_model, " + ", var)), data = data)
+  smf = summary(fm)
+  c(smf$p.table[var, ], r.squared = smf$r.squared)
+}
+
+
+#' Generic EnWAS
 #'
 #' @param data data.frame that the base_model was fit to and all exposures
 #' @param base_model character representation of the base_model
 #' @param expvars vector of the names of the exposures to be analyzed
-#' @param useResiduals logical vector indicating whether or not to fit the model to the residuals from the base_model fit
+#' @param model one of `lm`, `residuals` or `gam` to select the method of fitting
 #'
 #' @details
 #' This function examines the effects of the exposures listed in `expvars` in a model that is described by the `base_model`.
-#' It uses an internal function to perform per variable regressions and returns a data.frame with summary statistics for 
-#' each of those fits. If `useResiduals=TRUE` then the base model is fit, and the residuals obtained, each regression is
-#' then against those residuals. If `useResiduals=FALSE` then for each exposure the model is augmented by that exposure and
-#' fit.
+#' It uses an internal function to perform per variable regressions and returns a data.frame with summary statistics for
+#' each of those fits. If `model=residuals` then the base model is fit, and the residuals obtained, each regression is
+#' then against those residuals. If `model=lm` then for each exposure the model is augmented by that exposure and
+#' a linear model fit and for `model=gam` then a GAM model is fit.
 #'
 #' @return A data.frame where each row consists of a set of summary statistics for each exposure variable.
 #'  The estimates from the model, upper and lower confidence bounds (UCL and LCL), BH adjusted p-values and
 #' the multiple Rsquared value from the regression that was performed for that variable (either whole model or
 #' against the residuals).
 #'
-generic_enwas <- function(data, base_model, expvars, ..., useResiduals=FALSE)
+generic_enwas <- function(data, base_model, expvars, ..., model = c("lm", "residuals", "gam"))
 {
-  if( !is.character(expvars) ) 
+  model = match.arg(model)
+  if( !is.character(expvars) )
         stop("expvars must be the names of the variables")
   notprovided = setdiff(expvars, names(data))
-  if( length(notprovided) > 0 ) 
-       stop(paste0("Variables not in data: ", 
+  if( length(notprovided) > 0 )
+       stop(paste0("Variables not in data: ",
             paste(notprovided, collapse=", ")))
 
-  if( useResiduals) {
+  if(model == "residuals") {
      Residuals = lm(base_model, data = data)$residuals
      data$Residuals = Residuals
     EV_summary_invnorm <-
-     sapply(expvars, summarize_varR, 
-     data = data, ...) |> t() |> as.data.frame() |> add_rownames("EV") |>
+     sapply(expvars, summarize_varR,
+     data = data, ...) |> t() |> as.data.frame() |>
     dplyr::mutate(LCL = `Estimate` - 2 * `Std. Error`,
                   UCL = `Estimate` + 2 * `Std. Error`,
                   adj_pval = p.adjust(`Pr(>|t|)`, "BH"))
-  } else {
-  EV_summary_invnorm <- 
+  } else if( model==("lm")) {
+  EV_summary_invnorm <-
     sapply(expvars, summarize_var, base_model = base_model, data = data, ...) |>
-    t() |> as.data.frame() |> add_rownames("EV") |>
+    t() |> as.data.frame() |>
     dplyr::mutate(LCL = `Estimate` - 2 * `Std. Error`,
                   UCL = `Estimate` + 2 * `Std. Error`,
                   adj_pval = p.adjust(`Pr(>|t|)`, "BH"))
-    }
+  }
+  else if(model == "gam") {
+    EV_summary_invnorm <-
+      sapply(expvars, summarize_varGAM, base_model = base_model, data = data, ...) |>
+      t() |> as.data.frame() |>
+      dplyr::mutate(LCL = `Estimate` - 2 * `Std. Error`,
+                    UCL = `Estimate` + 2 * `Std. Error`,
+                    adj_pval = p.adjust(`Pr(>|t|)`, "BH"))
+  }
   return(EV_summary_invnorm)
  }
