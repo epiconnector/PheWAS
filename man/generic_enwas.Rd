@@ -4,7 +4,13 @@
 \alias{generic_enwas}
 \title{Generic EnWAS}
 \usage{
-generic_enwas(data, base_model, expvars, ..., useResiduals = FALSE)
+generic_enwas(
+  data,
+  base_model,
+  expvars,
+  ...,
+  model = c("lm", "residuals", "gam")
+)
 }
 \arguments{
 \item{data}{data.frame that the base_model was fit to and all exposures}
@@ -13,7 +19,7 @@ generic_enwas(data, base_model, expvars, ..., useResiduals = FALSE)
 
 \item{expvars}{vector of the names of the exposures to be analyzed}
 
-\item{useResiduals}{logical vector indicating whether or not to fit the model to the residuals from the base_model fit}
+\item{model}{one of `lm`, `residuals` or `gam` to select the method of fitting}
 }
 \value{
 A data.frame where each row consists of a set of summary statistics for each exposure variable.
@@ -26,8 +32,8 @@ Generic EnWAS
 }
 \details{
 This function examines the effects of the exposures listed in `expvars` in a model that is described by the `base_model`.
-It uses an internal function to perform per variable regressions and returns a data.frame with summary statistics for 
-each of those fits. If `useResiduals=TRUE` then the base model is fit, and the residuals obtained, each regression is
-then against those residuals. If `useResiduals=FALSE` then for each exposure the model is augmented by that exposure and
-fit.
+It uses an internal function to perform per variable regressions and returns a data.frame with summary statistics for
+each of those fits. If `model=residuals` then the base model is fit, and the residuals obtained, each regression is
+then against those residuals. If `model=lm` then for each exposure the model is augmented by that exposure and
+a linear model fit and for `model=gam` then a GAM model is fit.
 }

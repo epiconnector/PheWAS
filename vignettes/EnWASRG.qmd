@@ -575,11 +575,11 @@ lmtest = lm(lmC$residuals ~ Zproj)
 ```{r}
 
  combD2 = generic_enwas(data = allD, base_model = base_model, 
-                expvars = EVs, trans = "invnorm", useResiduals = TRUE)
+                expvars = EVs, trans = "invnorm", model = "residuals")
 
  
 combD3 = generic_enwas(data = allD, base_model = base_model, 
-                expvars = EVs, trans = "none", useResiduals = TRUE)
+                expvars = EVs, trans = "none", model = "residuals")
 
  plot(combDenwas$Estimate, combD2$Estimate, main="Comparison of Two Fitting Approaches: Estimate", 
       ylab = "Use Residuals", xlab  = "Refit Regression")          
@@ -595,7 +595,7 @@ In order to get parameter estimates that match the information theory part above
 
 ```{r sqrttrans}
 combDsqrt = generic_enwas(data=allD, base_model=base_model, expvars = EVs,
-                          trans="sqrt", useResiduals=FALSE)
+                          trans="sqrt", model="lm")
 
 ```
 
