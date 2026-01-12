@@ -4,6 +4,8 @@
 ## - dataset to be analyzed
 ## - baseline model formula as character string
 ## - character vector of exposure variables
+## - for the gam models we need to be able to set family and method
+## - for other glms we probably need to do something similar
 
 ## add var to the model and get its coefficients from the lm
 summarize_var <- function(var, base_model, data, trans = c("none", "log", "sqrt","invnorm"))
@@ -41,15 +43,17 @@ add_rownames <- function(d, var = "rownames")
 }
 
 summarize_varGAM = function (var, base_model, data, trans = c("none", "log", "sqrt",
-                                                              "invnorm"))
+                                                              "invnorm"),
+                             family = gaussian(), method = "GCV.Cp")
 {
   trans <- match.arg(trans)
   var <- switch(trans, none = var, log = sprintf("log(%s)",
                                                  var), sqrt = sprintf("sqrt(%s)", var), invnorm = sprintf("invNorm(%s)",
                                                                                                           var))
-  fm <- gam(formula = as.formula(paste0(base_model, " + ", var)), data = data)
+  fm <- gam(formula = as.formula(paste0(base_model, " + ", var)),
+            family = family, method = method, data = data)
   smf = summary(fm)
-  c(smf$p.table[var, ], r.squared = smf$r.squared)
+  c(smf$p.table[var, ], r.squared = smf$r.sq)
 }
 
 
@@ -102,10 +106,9 @@ generic_enwas <- function(data, base_model, expvars, ..., model = c("lm", "resid
   else if(model == "gam") {
     EV_summary_invnorm <-
       sapply(expvars, summarize_varGAM, base_model = base_model, data = data, ...) |>
-      t() |> as.data.frame() |>
-      dplyr::mutate(LCL = `Estimate` - 2 * `Std. Error`,
-                    UCL = `Estimate` + 2 * `Std. Error`,
-                    adj_pval = p.adjust(`Pr(>|t|)`, "BH"))
+      t() |> as.data.frame() |> dplyr::mutate(LCL = `Estimate` - 2 * `Std. Error`,
+                UCL = `Estimate` + 2 * `Std. Error`,
+                adj_pval = p.adjust(pick(starts_with("Pr"))[[1]], "BH"))
   }
   return(EV_summary_invnorm)
  }

@@ -1,0 +1,155 @@
+---
+title: 'Replicate BMI analysis on Systolic BP'
+format:
+  html:
+    code-fold: true
+fig-width: 10
+fig-height: 8
+fig-format: svg
+cache: false
+---
+
+## BMI Analysis
+
+Here we will mostly try to replicate the analysis from the Epiconnector main paper on BMI. But since the blood pressure the way it was measured changed after the J cycle we will reduce the data sets to only cover up to J.
+
+```{r setup, results='hide', echo=FALSE, message = FALSE}
+library(kableExtra)
+library(dplyr)
+library(survey)
+library(nhanesA)
+library(phonto)
+stopifnot(isTRUE(nhanesOptions("use.db")))
+demo_all <- nhanesSearchTableNames("DEMO")
+all_demo_data <- sapply(demo_all, nhanes, simplify = FALSE)
+object.size(all_demo_data) # ~45 MB
+## sapply(all_demo_data, dim)
+```
+
+```{r bmisetup, echo=FALSE, results='hide', warnings=FALSE}
+start_time <- proc.time()
+options(survey.lonely.psu = "adjust")
+unrowname <- function(d) { rownames(d) <- NULL; d }
+## Combine a DEMO table with one or more other tables
+shortCycle <- function(SDDSRVYR)
+{
+    cycle <- substring(SDDSRVYR, 8, 16)
+    cycle[grepl("August", cycle)] <- "2021-2023"
+    cycle
+}
+combineTables <- function(demo, ..., by = "SEQN")
+{
+    ddemo <-
+        nhanes(demo, translated = TRUE) |>
+            within(cycle <- shortCycle(SDDSRVYR))
+    for (x in c(...)) {
+        ddemo <- left_join(ddemo,
+                           nhanes(x, translated = TRUE),
+                           by = by)
+    }
+    ddemo
+}
+estMean <- function(design, what, groups, ...)
+{
+    svyby(what, groups, design = design, svymean, ...) |> unrowname()
+}
+## combine and subset design for our specific problem
+## BMI measurement is available as the `BMXBMI` variable in the `BMX`
+## tables. We need to combine these with `DEMO` tables. We want to
+## restrict to a specific age group. And here also with the BPX tables.
+
+makeDesign <- function(...)
+{
+    str(c(...))
+    data <- combineTables(...)
+##    if (anyNA(data$WTMEC2YR)) warning("dropping rows with missing exam weights (WTMEC2YR)")
+    data <- subset(data, is.finite(WTMEC2YR))
+    design <- svydesign(id = ~ SDMVPSU, strata = ~ SDMVSTRA, weights = ~ WTMEC2YR,
+                        data = data,
+                        nest = TRUE)
+    subset(design, is.finite(BMXBMI) & is.finite(BPXSY1) &
+                   RIDAGEYR >= 40 & RIDAGEYR <= 59 &
+                   RIDRETH1 %in% c("Non-Hispanic Black", "Non-Hispanic White"))
+}
+bmx_tables <- c("BMX", "BMX_B", "BMX_C", "BMX_D", "BMX_E", "BMX_F", "BMX_G", "BMX_H", "BMX_I", "BMX_J")
+
+sysbp_tables <- c("BPX", "BPX_B", "BPX_C", "BPX_D", "BPX_E", "BPX_F", "BPX_G", "BPX_H", "BPX_I", "BPX_J")
+
+demo_tables <- c("DEMO", "DEMO_B", "DEMO_C", "DEMO_D", "DEMO_E", "DEMO_F", "DEMO_G", "DEMO_H", "DEMO_I", "DEMO_J")
+
+all_designs <- mapply(makeDesign, demo_tables, bmx_tables, sysbp_tables, SIMPLIFY = FALSE)
+
+CI <- 
+    lapply(all_designs, 
+           estMean,
+           ~ BMXBMI,
+           ~ cycle + RIDRETH1 + RIAGENDR,
+           vartype = "ci") |> do.call(what = rbind) |> unrowname()
+
+CIbp <- 
+  lapply(all_designs, 
+           estMean,
+           ~ BPXSY1,
+           ~ cycle + RIDRETH1 + RIAGENDR,
+           vartype = "ci") |> do.call(what = rbind) |> unrowname()
+```
+
+```{r bmiplot, fig.width=12, fig.height=5, fig.cap="Average BMI for 40-59 year olds by Cycle for four population subgroups. The estimates and confidence intervals for average BMI within each subgroup is computed using the `estMean` function in the `survey` package, which takes into account the complex survey design of NHANES. Although the confidence intervals overlap substantially, the distinctly increasing trend in all subgroups reflects the obesity epidemic in the US over the period during which the continuous NHANES survey has been running.", echo=FALSE}
+library("lattice")
+library("latticeExtra")
+segplot(factor(cycle) ~ ci_l + ci_u | interaction(RIAGENDR, RIDRETH1),
+        data = CI, # level = estimate,
+        draw.bands = FALSE, lwd = 2, horizontal = FALSE,
+        ylab = "Mean BMI (with 95% confidence interbal)",
+        main = list(label = "Estimated Mean BMI with 95% Confidence Intervals across population subgroups \n (for Age Group 40-59 years)", adj = c(0, 0.5)),
+        scales = list(x = list(rot = 90)),
+        centers = BMXBMI) + layer_(panel.grid(v = -1, h = 0))
+run_time <- proc.time() - start_time
+```
+
+## Now for Systolic BP
+
+```{r sysbpplot, fig.width=12, fig.height=5, fig.cap="Average Systolic BP for 40-59 year olds by Cycle for four population subgroups. The estimates and confidence intervals for average BP within each subgroup is computed using the `estMean` function in the `survey` package, which takes into account the complex survey design of NHANES.", echo=FALSE}
+library("lattice")
+library("latticeExtra")
+segplot(factor(cycle) ~ ci_l + ci_u | interaction(RIAGENDR, RIDRETH1),
+        data = CIbp, # level = estimate,
+        draw.bands = FALSE, lwd = 2, horizontal = FALSE,
+        ylab = "Mean Systolic BP (with 95% confidence interbal)",
+        main = list(label = "Estimated Mean Systolic BP with 95% Confidence Intervals across population subgroups \n (for Age Group 40-59 years)", adj = c(0, 0.5)),
+        scales = list(x = list(rot = 90)),
+        centers = BPXSY1) + layer_(panel.grid(v = -1, h = 0))
+run_time <- proc.time() - start_time
+```
+
+## Replicate an analysis from Thomas' survey book
+
+He downloads data from the net, we can do this somewhat more succinctly.
+
+demo <- read.xport("demo_c.xpt")[, c(1:8,28:31)]
+bp <- read.xport("bpx_c.xpt")
+bm <- read.xport("bmx_c.xpt")[, c("SEQN","BMXBMI")]
+diet <- read.xport("dr1tot_c.xpt")[, c(1:52,63,64)]
+nhanes34 <- merge(demo, bp, by="SEQN")
+nhanes34 < -merge(nhanes34, bm, by="SEQN")
+nhanes34 <- merge(nhanes34, diet, by="SEQN")
+demo5 <- read.xport("demo_d.xpt")[,c(1:8,39:42)]
+bp5 <- read.xport("bpx_x.xpt")
+bp5$BPXSAR <- rowMeans(bp5[,c("BPXSY1","BPXSY2","BPXSY3",
+"BPXSY4")], na.rm=TRUE)
+bp5$BPXDAR <- rowMeans(bp5[,c("BPXDI1","BPXDI2","BPXDI3",
+"BPXDI4")], na.rm=TRUE)
+bm5 <- read.xport("bmx_d.xpt")[,c("SEQN","BMXBMI")]
+diet5 <- read.xport("dr1tot_d.xpt")[,c(1:52,64,65)]
+nhanes56 <- merge(demo5,bp5,by="SEQN")
+nhanes56 <- merge(nhanes56,bm5,by="SEQN")
+nhanes56 <- merge(nhanes56,diet5,by="SEQN")
+nhanes <- rbind(nhanes34,nhanes56)
+nhanes$fouryearwt <- nhanes$WTDRD1/2
+des <- svydesign(id=~SDMVPSU,strat=~SDMVSTRA,weights=~fouryearwt,
+nest=TRUE, data=subset(nhanes, !is.na(WTDRD1)))
+des <- update(des, sodium=DR1TSODI/1000, potassium=DR1TPOTA/1000)
+
+```{r repSurv}
+
+

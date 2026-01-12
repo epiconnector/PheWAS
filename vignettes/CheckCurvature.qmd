@@ -1,0 +1,250 @@
+---
+title: "Estimate Smooth and 2nd Derivs"
+format: html
+editor: visual
+---
+
+## From Positron/Claude
+
+```{r testcode, eval=FALSE}
+
+# Fit loess model
+loess_fit <- loess(y ~ x, span = 0.75)
+
+# Create a fine grid for prediction to get smooth derivatives
+x_grid <- seq(min(x), max(x), length.out = 200)
+y_pred <- predict(loess_fit, newdata = x_grid)
+
+# Calculate first derivative (using finite differences)
+dx <- diff(x_grid)
+dy <- diff(y_pred)
+first_deriv <- dy / dx
+x_first <- x_grid[-length(x_grid)]  # x values for first derivative
+
+# Calculate second derivative
+d2y <- diff(first_deriv)
+dx2 <- diff(x_first)
+second_deriv <- d2y / dx2
+x_second <- x_first[-length(x_first)]  # x values for second derivative
+
+# Create a tibble with results
+derivatives_df <- tibble(
+  x = x_second,
+  second_derivative = second_deriv,
+  abs_second_deriv = abs(second_deriv)
+)
+
+# Visualize
+ggplot() +
+  geom_point(aes(x = x, y = y), alpha = 0.5) +
+  geom_line(aes(x = x_grid, y = y_pred), color = "blue", linewidth = 1) +
+  labs(title = "Original Data with Loess Fit")
+
+## this is pretty jumpy - probably needs some smoothing or a better
+## way of estimating the 2nd derivative
+ggplot(derivatives_df, aes(x = x, y = second_derivative)) +
+  geom_line(linewidth = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  labs(title = "Second Derivative of Loess Curve",
+       y = "Second Derivative")
+
+# Find where second derivative is largest (in absolute value)
+max_curvature <- derivatives_df |> 
+  arrange(desc(abs_second_deriv)) |> 
+  slice_head(n = 5)
+
+max_curvature
+```
+
+## Running Code
+
+Here we assume that the code in the replication vignette has been run to at least create the `nhanes` variable. My guess is that we want to underfit so the estimate is more variable. There is a serialized small data set with just the good values of x (RIDAGEYR) and y (BPXSAR).
+
+```{r libs}
+library(splines)
+library(ggplot2)
+library(mgcv)
+```
+
+```{r, savedata, eval=FALSE}
+
+# Fit loess model
+x =nhanes$RIDAGEYR
+y = nhanes$BPXSAR
+good = (!is.na(x)) & (!is.na(y))
+x = x[good]
+y= y[good]
+df = data.frame(x=x, y=y)
+saveRDS(df, file="df.rds")
+
+```
+
+```{r }
+setwd("/mnt/Epiconnector")
+df = readRDS("df.rds")
+x = df$x
+y = df$y
+##we can fit a smooth curve to the data - and then
+##get an estimate of the equivalent number of parameters used in it
+loess_fit <- loess(y ~ x, span = 0.3)
+##with Equivalent number of parameters 
+loess_fit$enp
+
+# Create a fine grid for prediction to get smooth derivatives
+x_grid <- seq(min(x), max(x), length.out = 200)
+y_pred <- predict(loess_fit, newdata = x_grid)
+plot(x_grid,y_pred, type="l")
+
+# Calculate first derivative (using finite differences)
+dx <- diff(x_grid)
+dy <- diff(y_pred)
+first_deriv <- dy / dx
+x_first <- x_grid[-length(x_grid)]  # x values for first derivative
+
+# Calculate second derivative
+d2y <- diff(first_deriv)
+dx2 <- diff(x_first)
+second_deriv <- d2y / dx2
+x_second <- x_first[-length(x_first)]  # x values for second derivative
+
+# Create a dataframe
+derivatives_df <- data.frame(
+  x = x_second,
+  second_derivative = second_deriv,
+  abs_second_deriv = abs(second_deriv)
+)
+
+
+```
+
+## Attempt #2 Positron suggested using smooth.spline instead
+
+Which works, but actually isn't really any better as it also just uses differences. One probably wants to smooth the second derivative as it will likely then be more useful, but as above with a pretty small bandwidth as you want to keep the number of nodes high.
+
+I also think that you might want to smooth the absolute value of the second derivative since you just want high curvature and you don't want positive and negative values to smooth out - you want to not that this is high curvature.
+
+```{r, echo=TRUE}
+
+ss1 = smooth.spline(y~x)
+
+# Predict second derivative directly from spline
+sssecond_deriv <- predict(ss1, x = x_grid, deriv = 2)
+
+sssecondSm = with(sssecond_deriv, predict(loess(y~x, span=0.3), x))
+
+# Create results tibble
+ssderivatives_df <- data.frame(
+  x = sssecond_deriv$x,
+  second_derivative = sssecond_deriv$y,
+  abs_second_deriv = abs(sssecond_deriv$y)
+)
+
+
+# Visualize
+ggplot(ssderivatives_df, aes(x = x, y = abs_second_deriv)) +
+  geom_line(linewidth = 1) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  labs(title = "Second Derivative (via Smoothing Spline)",
+       y = "Abs Second Derivative")
+
+```
+
+## Now lets look at the two approaches
+
+```{r}
+
+
+##compare df/edf
+
+ss1$df
+loess_fit$enp
+
+## and we can note that both of these are larger than what we used for our splines.
+
+##next let's plot the absolute values of both estimates 2nd derivatives
+
+##no amount of fiddling with loess got a decent smooth - but supersmoother works
+
+densityest = supsmu(derivatives_df$x, derivatives_df$abs_second_deriv)
+plot(densityest, type="l")
+
+##here we can see that there curvature is biggest under 20, then there are 
+## peaks around 40 and 65
+
+#loess_2nddriv = loess(abs_second_deriv~x, enp.target=20, data=derivatives_df)
+
+##just by hand - not sure how good it is going to be
+#knots = c(9, 13, 17, 20, 26, 32, 38, 42, 48, 55, 62, 68, 72, 76) + .5
+
+## so removing two of the ones above gives us essentially the mgcv fit
+knots = c(9, 13, 17, 20, 26, 32, 38, 42, 48, 55, 68, 76) + .5
+
+lm1 = lm(y~ns(x, knots=knots))
+ord <- order(x)   # sort so the line draws cleanly
+
+##compare the curves - in black the smooth.spline fit
+plot(ss1, type="l")
+##below are the predictions from the lowess fit
+lines(x_grid,y_pred, col="blue")
+
+##below is the ns with hand selected knots
+lines(x[ord], lm1$fitted.values[ord], col="red", lwd=1)
+
+lm2 = lm(y ~ x)         
+
+anova(lm2,lm1)
+
+##try GAM
+
+fit_gam <- gam(y ~ s(x))
+##check the degress of freedom
+sum(fit_gam$edf)
+predgam = predict(fit_gam,  type = "response")
+ord <- order(x)   # sort so the line draws cleanly
+lines(x[ord], predgam[ord], col="green", lwd=1)
+
+##plot(x[ord], predgam[ord], type="l", col = "red", lwd = 1)
+
+
+anova(lm1, fit_gam, test="F")
+
+
+```
+
+## Stuff not used
+
+Some random testing of better ways to choose knots.
+
+```{r, eval=FALSE}
+## now we can normalize the y's and then sample
+## this does not seem to work very well
+#ynormSS = ssderivatives_df$abs_second_deriv/sum(ssderivatives_df$abs_second_deriv)
+
+#t1 = sort(sample(ssderivatives_df$x, 12, prob=ynormSS))
+
+##from positron:
+# Calculate quantiles of y - use type=1 so we get actual y values and 
+# then can use match to get the corresponding x values - that would be
+#fast - maybe not so important, but still
+y_quantiles <- quantile(y, probs = c(0.25, 0.5, 0.75, 0.9, 0.95),type=1)
+
+mm = match(y_quantiles, y)
+xvals = x[mm]
+# For each quantile, find the x value where y is closest
+n_quantiles <- length(y_quantiles)
+quantile_results <- data.frame(
+  quantile = names(y_quantiles),
+  y_value = y_quantiles,
+  x_value = numeric(n_quantiles),
+  actual_y = numeric(n_quantiles)
+)
+
+for (i in seq_along(y_quantiles)) {
+  idx <- which.min(abs(y - y_quantiles[i]))
+  quantile_results$x_value[i] <- x[idx]
+  quantile_results$actual_y[i] <- y[idx]
+}
+
+quantile_results
+
+```
